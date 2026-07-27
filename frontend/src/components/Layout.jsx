@@ -1,18 +1,14 @@
 import {
   BarChart3,
   BellRing,
-  Blocks,
-  BrainCircuit,
   Database,
   Download,
-  LayoutDashboard,
+  ListTodo,
   LogOut,
-  Megaphone,
   Menu,
   PhoneCall,
   Search,
   Settings,
-  Sparkles,
   Target,
   X,
 } from 'lucide-react';
@@ -20,28 +16,34 @@ import { NavLink } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-const growLinks = [
-  { to: '/', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/finder', label: 'Generar leads', icon: Search, adminOnly: true },
+const executionLinks = [
+  { to: '/focus', label: 'Hoy', icon: ListTodo },
+  { to: '/finder', label: 'Generar leads', icon: Search },
   { to: '/leads', label: 'Base de leads', icon: Database },
   { to: '/pipeline', label: 'Pipeline', icon: Target },
   { to: '/followups', label: 'Seguimientos', icon: BellRing },
   { to: '/call-log', label: 'Call Log', icon: PhoneCall },
+];
+
+const adminLinks = [
+  { to: '/performance', label: 'Rendimiento', icon: BarChart3 },
   { to: '/exports', label: 'Exportaciones', icon: Download },
 ];
 
-const futureModules = [
-  { label: 'AdVision', icon: Megaphone },
-  { label: 'Aura Vision', icon: Sparkles },
-  { label: 'Aura Flow', icon: Blocks },
-  { label: 'Aura Analytics', icon: BarChart3 },
-  { label: 'Aura AI', icon: BrainCircuit },
-];
+function NavItem({ to, label, icon: Icon, close }) {
+  return (
+    <NavLink to={to} onClick={close} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+      <Icon size={18} />
+      <span>{label}</span>
+    </NavLink>
+  );
+}
 
 export default function Layout({ children }) {
   const { profile, signOut } = useAuth();
   const [open, setOpen] = useState(false);
   const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
+  const isAdmin = profile?.role === 'admin';
 
   const close = () => setOpen(false);
 
@@ -49,7 +51,7 @@ export default function Layout({ children }) {
     <div className="app-shell">
       <header className="mobile-header">
         <button className="icon-button" onClick={() => setOpen(true)} aria-label="Abrir menú"><Menu /></button>
-        <div className="mobile-brand">AURA OS</div>
+        <div className="mobile-brand">AURA GROW</div>
         <span className="avatar small">{firstName[0]}</span>
       </header>
 
@@ -68,39 +70,40 @@ export default function Layout({ children }) {
 
         <div className="module-title">
           <span className="module-dot" />
-          <div><small>MÓDULO ACTIVO</small><strong>Aura Grow</strong></div>
+          <div><small>AURA GROW</small><strong>Focus</strong></div>
         </div>
 
         <nav className="sidebar-nav">
-          <p className="nav-caption">OPERACIÓN</p>
-          {growLinks.filter((item) => !item.adminOnly || profile?.role === 'admin').map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} end={to === '/'} onClick={close} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
-              <Icon size={18} />
-              <span>{label}</span>
-            </NavLink>
-          ))}
+          <p className="nav-caption">EJECUCIÓN COMERCIAL</p>
+          {executionLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
 
-          <p className="nav-caption future-caption">PRÓXIMOS MÓDULOS</p>
-          {futureModules.map(({ label, icon: Icon }) => (
-            <div className="nav-link disabled" key={label} title="Se construirá después de Aura Grow">
-              <Icon size={18} />
-              <span>{label}</span>
-              <em>Próximamente</em>
-            </div>
-          ))}
+          {isAdmin && (
+            <>
+              <p className="nav-caption admin-caption">CONTROL Y MEDICIÓN</p>
+              {adminLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+            </>
+          )}
         </nav>
 
         <div className="sidebar-footer">
-          <NavLink to="/settings" className="nav-link" onClick={close}><Settings size={18} /><span>Configuración</span></NavLink>
+          <NavLink to="/settings" className="nav-link" onClick={close}><Settings size={18} /><span>Mi cuenta</span></NavLink>
           <div className="user-card">
             <span className="avatar">{firstName[0]}</span>
-            <div><strong>{profile?.full_name || 'Usuario'}</strong><small>{profile?.role === 'admin' ? 'Administradora' : 'Agente'}</small></div>
+            <div><strong>{profile?.full_name || 'Usuario'}</strong><small>{isAdmin ? 'Administradora' : 'Setter Focus'}</small></div>
             <button className="icon-button" onClick={signOut} title="Cerrar sesión"><LogOut size={17} /></button>
           </div>
         </div>
       </aside>
 
       <main className="main-content">{children}</main>
+
+      <nav className="mobile-bottom-nav" aria-label="Navegación móvil de Focus">
+        <NavLink to="/focus" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ListTodo size={19} /><span>Hoy</span></NavLink>
+        <NavLink to="/finder" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Search size={19} /><span>Generar</span></NavLink>
+        <NavLink to="/leads" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Database size={19} /><span>Leads</span></NavLink>
+        <NavLink to="/followups" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><BellRing size={19} /><span>Seguimientos</span></NavLink>
+        <NavLink to="/call-log" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><PhoneCall size={19} /><span>Call Log</span></NavLink>
+      </nav>
     </div>
   );
 }

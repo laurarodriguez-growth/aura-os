@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { CalendarClock, ExternalLink, Phone, Save, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { CalendarClock, CheckCircle2, ExternalLink, Phone, Save, X } from 'lucide-react';
 import { api } from '../lib/api';
 
 const defaultCall = {
@@ -16,34 +16,56 @@ const defaultCall = {
   sale_amount: '',
 };
 
+function formFromLead(data) {
+  return {
+    status: data.status || 'Nuevo',
+    owner_id: data.owner_id || '',
+    outcome: data.outcome || '',
+    notes: data.notes || '',
+    next_followup_date: data.next_followup_date || '',
+    decision_maker_name: data.decision_maker_name || '',
+    decision_maker_title: data.decision_maker_title || '',
+    decision_maker_link: data.decision_maker_link || '',
+    manual_ads_score: Number(data.manual_ads_score || 0),
+    manual_volume_score: Number(data.manual_volume_score || 0),
+    manual_followup_score: Number(data.manual_followup_score || 0),
+    manual_decision_maker_score: Number(data.manual_decision_maker_score || 0),
+    do_not_contact: Boolean(data.do_not_contact),
+  };
+}
+
+function normalizedSnapshot(value) {
+  return JSON.stringify({
+    ...value,
+    owner_id: value.owner_id || '',
+    next_followup_date: value.next_followup_date || '',
+    manual_ads_score: Number(value.manual_ads_score || 0),
+    manual_volume_score: Number(value.manual_volume_score || 0),
+    manual_followup_score: Number(value.manual_followup_score || 0),
+    manual_decision_maker_score: Number(value.manual_decision_maker_score || 0),
+    do_not_contact: Boolean(value.do_not_contact),
+  });
+}
+
 export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChanged }) {
   const [lead, setLead] = useState(null);
   const [form, setForm] = useState({});
+  const [baseline, setBaseline] = useState({});
   const [call, setCall] = useState(defaultCall);
   const [tab, setTab] = useState('profile');
   const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
 
-  const load = async () => {
+  const load = async ({ markSaved = false } = {}) => {
     setError('');
     try {
       const data = await api(`/api/leads/${leadId}`);
+      const nextForm = formFromLead(data);
       setLead(data);
-      setForm({
-        status: data.status || 'Nuevo',
-        owner_id: data.owner_id || '',
-        outcome: data.outcome || '',
-        notes: data.notes || '',
-        next_followup_date: data.next_followup_date || '',
-        decision_maker_name: data.decision_maker_name || '',
-        decision_maker_title: data.decision_maker_title || '',
-        decision_maker_link: data.decision_maker_link || '',
-        manual_ads_score: data.manual_ads_score || 0,
-        manual_volume_score: data.manual_volume_score || 0,
-        manual_followup_score: data.manual_followup_score || 0,
-        manual_decision_maker_score: data.manual_decision_maker_score || 0,
-        do_not_contact: Boolean(data.do_not_contact),
-      });
+      setForm(nextForm);
+      setBaseline(nextForm);
+      setSaved(markSaved);
     } catch (e) {
       setError(e.message);
     }
@@ -51,7 +73,18 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
 
   useEffect(() => { load(); }, [leadId]);
 
+  const dirty = useMemo(
+    () => normalizedSnapshot(form) !== normalizedSnapshot(baseline),
+    [form, baseline],
+  );
+
+  const changeForm = (changes) => {
+    setSaved(false);
+    setForm((current) => ({ ...current, ...changes }));
+  };
+
   const save = async () => {
+    if (!dirty) return;
     setSaving(true);
     setError('');
     try {
@@ -65,7 +98,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
         manual_decision_maker_score: Number(form.manual_decision_maker_score || 0),
       };
       await api(`/api/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(payload) });
-      await load();
+      await load({ markSaved: true });
       onChanged?.();
     } catch (e) {
       setError(e.message);
@@ -111,6 +144,14 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
     ['WhatsApp', lead.whatsapp_url],
   ].filter(([, url]) => url);
 
+  const saveLabel = saving
+    ? 'Guardando…'
+    : dirty
+      ? 'Guardar cambios'
+      : saved
+        ? 'Cambios guardados'
+        : 'Sin cambios';
+
   return (
     <div className="drawer-layer">
       <button className="drawer-backdrop" onClick={onClose} aria-label="Cerrar" />
@@ -147,23 +188,26 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                 {links.map(([label, url]) => <a key={label} href={url} target="_blank" rel="noreferrer">{label}<ExternalLink size={14} /></a>)}
               </div>
               <div className="form-grid two">
-                <label>Estado<select value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value })}>{statuses.map((s) => <option key={s}>{s}</option>)}</select></label>
-                <label>Responsable<select value={form.owner_id} onChange={(e) => setForm({ ...form, owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label>
-                <label>Resultado<input value={form.outcome} onChange={(e) => setForm({ ...form, outcome: e.target.value })} placeholder="Ej. Solicitó información" /></label>
-                <label>Próximo seguimiento<input type="date" value={form.next_followup_date} onChange={(e) => setForm({ ...form, next_followup_date: e.target.value })} /></label>
-                <label>Decisor<input value={form.decision_maker_name} onChange={(e) => setForm({ ...form, decision_maker_name: e.target.value })} /></label>
-                <label>Cargo<input value={form.decision_maker_title} onChange={(e) => setForm({ ...form, decision_maker_title: e.target.value })} /></label>
+                <label>Estado<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((s) => <option key={s}>{s}</option>)}</select></label>
+                <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label>
+                <label>Resultado<input value={form.outcome} onChange={(e) => changeForm({ outcome: e.target.value })} placeholder="Ej. Solicitó información" /></label>
+                <label>Próximo seguimiento<input type="date" value={form.next_followup_date} onChange={(e) => changeForm({ next_followup_date: e.target.value })} /></label>
+                <label>Decisor<input value={form.decision_maker_name} onChange={(e) => changeForm({ decision_maker_name: e.target.value })} /></label>
+                <label>Cargo<input value={form.decision_maker_title} onChange={(e) => changeForm({ decision_maker_title: e.target.value })} /></label>
               </div>
-              <label>Notas<textarea rows="5" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} placeholder="Información útil para el próximo contacto" /></label>
+              <label>Notas<textarea rows="5" value={form.notes} onChange={(e) => changeForm({ notes: e.target.value })} placeholder="Información útil para el próximo contacto" /></label>
               <h3 className="form-section-title">Validación manual del ICP</h3>
               <div className="form-grid four">
-                <label>Anuncios 0–8<input type="number" min="0" max="8" value={form.manual_ads_score} onChange={(e) => setForm({ ...form, manual_ads_score: e.target.value })} /></label>
-                <label>Volumen 0–6<input type="number" min="0" max="6" value={form.manual_volume_score} onChange={(e) => setForm({ ...form, manual_volume_score: e.target.value })} /></label>
-                <label>Seguimiento 0–8<input type="number" min="0" max="8" value={form.manual_followup_score} onChange={(e) => setForm({ ...form, manual_followup_score: e.target.value })} /></label>
-                <label>Decisor 0–8<input type="number" min="0" max="8" value={form.manual_decision_maker_score} onChange={(e) => setForm({ ...form, manual_decision_maker_score: e.target.value })} /></label>
+                <label>Anuncios 0–8<input type="number" min="0" max="8" value={form.manual_ads_score} onChange={(e) => changeForm({ manual_ads_score: e.target.value })} /></label>
+                <label>Volumen 0–6<input type="number" min="0" max="6" value={form.manual_volume_score} onChange={(e) => changeForm({ manual_volume_score: e.target.value })} /></label>
+                <label>Seguimiento 0–8<input type="number" min="0" max="8" value={form.manual_followup_score} onChange={(e) => changeForm({ manual_followup_score: e.target.value })} /></label>
+                <label>Decisor 0–8<input type="number" min="0" max="8" value={form.manual_decision_maker_score} onChange={(e) => changeForm({ manual_decision_maker_score: e.target.value })} /></label>
               </div>
-              <label className="check-row"><input type="checkbox" checked={form.do_not_contact} onChange={(e) => setForm({ ...form, do_not_contact: e.target.checked })} />No volver a contactar</label>
-              <button className="button primary full" onClick={save} disabled={saving}><Save size={17} />{saving ? 'Guardando…' : 'Guardar cambios'}</button>
+              <label className="check-row"><input type="checkbox" checked={form.do_not_contact} onChange={(e) => changeForm({ do_not_contact: e.target.checked })} />No volver a contactar</label>
+              <button className={`button full ${dirty ? 'primary' : 'save-idle'}`} onClick={save} disabled={saving || !dirty}>
+                {saved && !dirty ? <CheckCircle2 size={17} /> : <Save size={17} />}
+                {saveLabel}
+              </button>
             </>
           )}
 
