@@ -1,0 +1,5 @@
+window.AURA_CONFIG = {
+  SUPABASE_URL: "PEGA_AQUI_TU_PROJECT_URL",
+  SUPABASE_PUBLISHABLE_KEY: "PEGA_AQUI_TU_PUBLISHABLE_KEY",
+  API_BASE_URL: "https://aura-grow-api.onrender.com"
+};
