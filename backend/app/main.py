@@ -14,14 +14,19 @@ from .config import get_settings
 from .db import get_supabase
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
-from .models import CallLogCreate, LeadUpdate, SearchJobCreate
-from .scoring import calculate_auto_score, normalize_manual_scores
+from .models import CallLogCreate, LeadUpdate, ScoringTemplateCreate, SearchJobCreate
+from .scoring import (
+    SCORING_CATALOG,
+    calculate_configured_score,
+    get_scoring_preset,
+    normalize_manual_scores,
+)
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("aura-grow")
 
-app = FastAPI(title=settings.app_name, version="1.0.0")
+app = FastAPI(title=settings.app_name, version="2.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -37,6 +42,12 @@ STATUSES = [
     "Respondió", "Interesado", "Reunión agendada", "Propuesta enviada", "Diagnóstico vendido",
     "Implementación vendida", "No interesado", "No califica", "Descartado",
 ]
+
+PENDING_STATUSES = ["Nuevo", "Investigando", "Listo para contactar"]
+CLOSED_STATUSES = ["Descartado", "No interesado", "No califica", "Implementación vendida"]
+LEAD_CAPACITY_MAX = 100
+LEAD_GENERATION_UNLOCK_AT = 50
+CALL_LOG_PAGE_SIZES = [25, 50, 100]
 
 
 def utcnow_iso() -> str:
@@ -75,6 +86,136 @@ def _profile_map() -> dict[str, str]:
     return {str(item["id"]): item.get("full_name") or "Usuario" for item in profiles}
 
 
+def _base_lead_count_query() -> Any:
+    return (
+        get_supabase().table("leads")
+        .select("id", count="exact")
+        .eq("archived", False)
+        .is_("excluded_reason", "null")
+    )
+
+
+def _pending_lead_count() -> int:
+    return _count(
+        _base_lead_count_query()
+        .in_("status", PENDING_STATUSES)
+        .eq("do_not_contact", False)
+    )
+
+
+def _lead_capacity_snapshot() -> dict[str, Any]:
+    pending = _pending_lead_count()
+    available = max(0, LEAD_CAPACITY_MAX - pending)
+    enabled = pending <= LEAD_GENERATION_UNLOCK_AT and available > 0
+    return {
+        "pending_leads": pending,
+        "capacity_max": LEAD_CAPACITY_MAX,
+        "unlock_at": LEAD_GENERATION_UNLOCK_AT,
+        "available_slots": available,
+        "generation_enabled": enabled,
+        "max_new_leads": available if enabled else 0,
+        "message": (
+            f"Puedes generar hasta {available} leads nuevos."
+            if enabled
+            else f"Tienes {pending} leads pendientes. Trabaja la base hasta dejarla en {LEAD_GENERATION_UNLOCK_AT} o menos."
+        ),
+    }
+
+
+def _safe_search_term(value: str | None) -> str:
+    if not value:
+        return ""
+    allowed = []
+    for char in value.strip():
+        if char.isalnum() or char in " áéíóúÁÉÍÓÚñÑ@._+-":
+            allowed.append(char)
+    return "".join(allowed).strip()[:160]
+
+
+def _call_log_query(
+    *,
+    search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: str | None = None,
+    outcome: str | None = None,
+    agent_id: str | None = None,
+    count: str | None = None,
+) -> Any:
+    db = get_supabase()
+    query = db.table("call_log_enriched").select("*", count=count)
+    safe = _safe_search_term(search)
+    if safe:
+        pattern = f"*{safe}*"
+        query = query.or_(
+            ",".join(
+                [
+                    f"business_name.ilike.{pattern}",
+                    f"agent_name.ilike.{pattern}",
+                    f"contact_name.ilike.{pattern}",
+                    f"contact_title.ilike.{pattern}",
+                    f"notes.ilike.{pattern}",
+                    f"objection.ilike.{pattern}",
+                    f"outcome.ilike.{pattern}",
+                    f"next_step.ilike.{pattern}",
+                    f"channel.ilike.{pattern}",
+                ]
+            )
+        )
+    if date_from:
+        query = query.gte("occurred_at", f"{date_from.isoformat()}T00:00:00Z")
+    if date_to:
+        query = query.lte("occurred_at", f"{date_to.isoformat()}T23:59:59.999999Z")
+    if channel:
+        query = query.eq("channel", channel)
+    if outcome:
+        query = query.eq("outcome", outcome)
+    if agent_id:
+        query = query.eq("agent_id", agent_id)
+    return query
+
+
+def _fetch_filtered_call_logs(
+    *,
+    search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: str | None = None,
+    outcome: str | None = None,
+    agent_id: str | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start = 0
+    page_size = 1000
+    while True:
+        response = (
+            _call_log_query(
+                search=search,
+                date_from=date_from,
+                date_to=date_to,
+                channel=channel,
+                outcome=outcome,
+                agent_id=agent_id,
+            )
+            .order("occurred_at", desc=True)
+            .range(start, start + page_size - 1)
+            .execute()
+        )
+        batch = response.data or []
+        rows.extend(batch)
+        if len(batch) < page_size:
+            break
+        start += page_size
+    return rows
+
+
+def _job_scoring(job: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    preset = get_scoring_preset(str(job.get("niche") or "Dental"))
+    rules = job.get("scoring_rules") or preset["rules"]
+    thresholds = job.get("scoring_thresholds") or preset["thresholds"]
+    return list(rules), dict(thresholds)
+
+
 def _log_activity(lead_id: str, user_id: str, event_type: str, description: str, metadata: dict[str, Any] | None = None) -> None:
     try:
         get_supabase().table("activities").insert(
@@ -110,10 +251,85 @@ def profiles(user: Annotated[CurrentUser, Depends(get_current_user)]) -> list[di
 def public_config(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any]:
     return {
         "statuses": STATUSES,
+        "pending_statuses": PENDING_STATUSES,
         "max_api_budget_per_job": settings.max_api_budget_per_job,
         "google_cache_days": settings.google_cache_days,
         "website_cache_days": settings.website_cache_days,
+        "lead_capacity_max": LEAD_CAPACITY_MAX,
+        "lead_generation_unlock_at": LEAD_GENERATION_UNLOCK_AT,
+        "call_log_page_sizes": CALL_LOG_PAGE_SIZES,
     }
+
+
+@app.get("/api/lead-capacity")
+def lead_capacity(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any]:
+    return _lead_capacity_snapshot()
+
+
+@app.get("/api/scoring/catalog")
+def scoring_catalog(user: Annotated[CurrentUser, Depends(require_admin)]) -> dict[str, Any]:
+    return {
+        "catalog": SCORING_CATALOG,
+        "operators": {
+            "is_true": "Sí / detectado",
+            "is_false": "No / no detectado",
+            "gte": "Mayor o igual que",
+            "lte": "Menor o igual que",
+            "equals": "Igual a",
+            "contains": "Contiene",
+            "not_contains": "No contiene",
+        },
+    }
+
+
+@app.get("/api/scoring/preset")
+def scoring_preset(
+    user: Annotated[CurrentUser, Depends(require_admin)],
+    niche: str = Query(default="Dental"),
+) -> dict[str, Any]:
+    return get_scoring_preset(niche)
+
+
+@app.get("/api/scoring/templates")
+def list_scoring_templates(
+    user: Annotated[CurrentUser, Depends(require_admin)],
+    niche: str | None = None,
+) -> list[dict[str, Any]]:
+    query = get_supabase().table("scoring_templates").select("*").order("is_default", desc=True).order("updated_at", desc=True)
+    if niche:
+        query = query.eq("niche", niche)
+    return query.execute().data or []
+
+
+@app.post("/api/scoring/templates")
+def save_scoring_template(
+    payload: ScoringTemplateCreate,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    db = get_supabase()
+    if payload.is_default:
+        db.table("scoring_templates").update({"is_default": False}).eq("niche", payload.niche).eq("country", payload.country).execute()
+    row = {
+        "created_by": user.id,
+        "name": payload.name.strip(),
+        "niche": payload.niche,
+        "country": payload.country,
+        "rules": [rule.model_dump(mode="json") for rule in payload.rules],
+        "thresholds": payload.thresholds.model_dump(mode="json"),
+        "is_default": payload.is_default,
+        "updated_at": utcnow_iso(),
+    }
+    response = db.table("scoring_templates").upsert(row, on_conflict="created_by,name").execute()
+    return _first(response) or row
+
+
+@app.delete("/api/scoring/templates/{template_id}")
+def delete_scoring_template(
+    template_id: str,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, bool]:
+    get_supabase().table("scoring_templates").delete().eq("id", template_id).execute()
+    return {"deleted": True}
 
 
 @app.post("/api/search-jobs")
@@ -121,18 +337,57 @@ def create_search_job(
     payload: SearchJobCreate,
     user: Annotated[CurrentUser, Depends(require_admin)],
 ) -> dict[str, Any]:
+    capacity = _lead_capacity_snapshot()
+    if not capacity["generation_enabled"]:
+        raise HTTPException(status_code=409, detail=capacity["message"])
+
+    effective_max_results = min(payload.max_results, int(capacity["max_new_leads"]))
+    if effective_max_results < 1:
+        raise HTTPException(status_code=409, detail="La base ya alcanzó su capacidad operativa de leads pendientes.")
+
     budget = min(payload.api_request_budget, settings.max_api_budget_per_job)
     queries = build_queries(payload.niche, payload.city, payload.zones, payload.services)
     if not queries:
         raise HTTPException(status_code=400, detail="No se pudieron generar consultas")
+
+    preset = get_scoring_preset(payload.niche)
+    scoring_rules = [rule.model_dump(mode="json") for rule in payload.scoring_rules]
+    scoring_thresholds = payload.scoring_thresholds.model_dump(mode="json")
+    template_name = payload.scoring_template_name
+
+    if payload.scoring_mode == "template":
+        if not payload.scoring_template_id:
+            raise HTTPException(status_code=400, detail="Selecciona una plantilla de scoring")
+        template = _first(
+            get_supabase().table("scoring_templates").select("*").eq("id", payload.scoring_template_id).limit(1).execute()
+        )
+        if not template:
+            raise HTTPException(status_code=404, detail="Plantilla de scoring no encontrada")
+        scoring_rules = template.get("rules") or []
+        scoring_thresholds = template.get("thresholds") or preset["thresholds"]
+        template_name = template.get("name")
+    elif payload.scoring_mode == "automatic" and not scoring_rules:
+        scoring_rules = preset["rules"]
+        scoring_thresholds = preset["thresholds"]
+        template_name = template_name or preset["name"]
+    elif payload.scoring_mode == "manual" and not scoring_rules:
+        raise HTTPException(status_code=400, detail="Agrega al menos una regla de scoring manual")
+
     row = {
         "created_by": user.id,
         "niche": payload.niche,
         "city": payload.city,
         "zones": payload.zones,
         "services": payload.services,
-        "max_results": payload.max_results,
+        "max_results": effective_max_results,
+        "pending_at_start": int(capacity["pending_leads"]),
+        "new_leads_added": 0,
         "api_request_budget": budget,
+        "scoring_mode": payload.scoring_mode,
+        "scoring_template_id": payload.scoring_template_id,
+        "scoring_template_name": template_name,
+        "scoring_rules": scoring_rules,
+        "scoring_thresholds": scoring_thresholds,
         "api_requests_used": 0,
         "status": "queued",
         "phase": "discovery",
@@ -176,23 +431,39 @@ def _job_result_count(job_id: str) -> int:
     return _count(builder)
 
 
-def _upsert_discovered_place(job: dict[str, Any], place: dict[str, Any], query_text: str, from_cache: bool) -> str | None:
+def _upsert_discovered_place(
+    job: dict[str, Any],
+    place: dict[str, Any],
+    query_text: str,
+    from_cache: bool,
+) -> tuple[str | None, bool]:
     db = get_supabase()
     place_id = place.get("id")
     if not place_id:
-        return None
+        return None, False
+
+    existing = _first(db.table("leads").select("id").eq("place_id", place_id).limit(1).execute())
     exclusion = is_hard_excluded(place, job["niche"])
+    is_new_pending = existing is None and not exclusion
+
     lead_data = place_to_lead(place, job["niche"], query_text)
     lead_data["excluded_reason"] = exclusion
     lead_data["zone"] = None
-    lead_data.update(calculate_auto_score(lead_data))
-    lead_data.update(normalize_manual_scores(lead_data))
+    rules, thresholds = _job_scoring(job)
+    lead_data.update(calculate_configured_score(lead_data, rules, thresholds))
+    lead_data["scoring_mode"] = job.get("scoring_mode") or "automatic"
+    lead_data["scoring_template_id"] = job.get("scoring_template_id")
+    lead_data["scoring_template_name"] = job.get("scoring_template_name")
+    lead_data["scoring_rules"] = rules
+    lead_data["scoring_thresholds"] = thresholds
+    lead_data["scoring_job_id"] = job.get("id")
+    lead_data.update(normalize_manual_scores(lead_data, thresholds))
 
-    # Only public extraction fields are updated; commercial work fields are intentionally omitted.
+    # Solo se actualizan datos públicos y scoring. El trabajo comercial nunca se sobrescribe.
     db.table("leads").upsert(lead_data, on_conflict="place_id").execute()
     lead = _first(db.table("leads").select("id").eq("place_id", place_id).limit(1).execute())
     if not lead:
-        return None
+        return None, False
     lead_id = lead["id"]
     db.table("search_results").upsert(
         {
@@ -200,10 +471,16 @@ def _upsert_discovered_place(job: dict[str, Any], place: dict[str, Any], query_t
             "lead_id": lead_id,
             "query_text": query_text,
             "from_google_cache": from_cache,
+            "is_new_lead": is_new_pending,
+            "scoring_template_name": job.get("scoring_template_name"),
+            "scoring_rules": rules,
+            "scoring_thresholds": thresholds,
+            "auto_score": lead_data.get("auto_score", 0),
+            "auto_tier": lead_data.get("auto_tier", "Descartar"),
         },
         on_conflict="job_id,lead_id",
     ).execute()
-    return lead_id
+    return lead_id, is_new_pending
 
 
 @app.post("/api/search-jobs/{job_id}/step")
@@ -227,10 +504,12 @@ def step_search_job(
             queries: list[str] = job.get("queries") or []
             query_index = int(job.get("query_index") or 0)
             total = _job_result_count(job_id)
+            new_leads_added = int(job.get("new_leads_added") or 0)
             budget_used = int(job.get("api_requests_used") or 0)
             budget = int(job.get("api_request_budget") or 0)
+            capacity_reached = _pending_lead_count() >= LEAD_CAPACITY_MAX
 
-            if total >= int(job.get("max_results") or 0) or query_index >= len(queries) or budget_used >= budget:
+            if capacity_reached or new_leads_added >= int(job.get("max_results") or 0) or query_index >= len(queries) or budget_used >= budget:
                 updated = {
                     "phase": "audit",
                     "current_page_token": None,
@@ -246,13 +525,18 @@ def step_search_job(
                 budget_used += 1
             places = response.get("places") or []
             for place in places:
-                if _job_result_count(job_id) >= int(job["max_results"]):
+                if new_leads_added >= int(job["max_results"]):
                     break
-                _upsert_discovered_place(job, place, query_text, from_cache)
+                if _pending_lead_count() >= LEAD_CAPACITY_MAX:
+                    capacity_reached = True
+                    break
+                _, was_new_pending = _upsert_discovered_place(job, place, query_text, from_cache)
+                if was_new_pending:
+                    new_leads_added += 1
 
             total = _job_result_count(job_id)
             next_token = response.get("nextPageToken")
-            if next_token and total < int(job["max_results"]) and budget_used < budget:
+            if next_token and new_leads_added < int(job["max_results"]) and budget_used < budget:
                 next_query_index = query_index
             else:
                 next_query_index = query_index + 1
@@ -264,9 +548,10 @@ def step_search_job(
                 "api_requests_used": budget_used,
                 "cache_hits_google": int(job.get("cache_hits_google") or 0) + (1 if from_cache else 0),
                 "total_discovered": total,
+                "new_leads_added": new_leads_added,
                 "updated_at": utcnow_iso(),
             }
-            if total >= int(job["max_results"]) or next_query_index >= len(queries) or budget_used >= budget:
+            if capacity_reached or new_leads_added >= int(job["max_results"]) or next_query_index >= len(queries) or budget_used >= budget:
                 updated["phase"] = "audit"
                 updated["current_page_token"] = None
             db.table("search_jobs").update(updated).eq("id", job_id).execute()
@@ -314,13 +599,27 @@ def step_search_job(
 
                 merged = dict(lead)
                 merged.update(update_data)
-                score = calculate_auto_score(merged)
+                rules, thresholds = _job_scoring(job)
+                score = calculate_configured_score(merged, rules, thresholds)
                 existing_flags = list(update_data.get("quality_flags") or [])
                 score["quality_flags"] = list(dict.fromkeys(existing_flags + list(score.get("quality_flags") or [])))
                 update_data.update(score)
-                update_data.update(normalize_manual_scores({**merged, **score}))
+                update_data["scoring_mode"] = job.get("scoring_mode") or "automatic"
+                update_data["scoring_template_id"] = job.get("scoring_template_id")
+                update_data["scoring_template_name"] = job.get("scoring_template_name")
+                update_data["scoring_rules"] = rules
+                update_data["scoring_thresholds"] = thresholds
+                update_data["scoring_job_id"] = job.get("id")
+                update_data.update(normalize_manual_scores({**merged, **score, **update_data}, thresholds))
                 update_data["last_web_audit_at"] = utcnow_iso()
                 db.table("leads").update(update_data).eq("id", lead["id"]).execute()
+                db.table("search_results").update({
+                    "scoring_template_name": job.get("scoring_template_name"),
+                    "scoring_rules": rules,
+                    "scoring_thresholds": thresholds,
+                    "auto_score": score.get("auto_score", 0),
+                    "auto_tier": score.get("auto_tier", "Descartar"),
+                }).eq("job_id", job_id).eq("lead_id", lead["id"]).execute()
                 audited_count += 1
 
             new_offset = offset + len(results)
@@ -347,6 +646,41 @@ def step_search_job(
         raise HTTPException(status_code=500, detail=f"La búsqueda falló: {str(exc)[:300]}") from exc
 
 
+@app.get("/api/leads/view-counts")
+def lead_view_counts(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, int]:
+    db = get_supabase()
+
+    def base() -> Any:
+        return (
+            db.table("leads")
+            .select("id", count="exact")
+            .eq("archived", False)
+            .is_("excluded_reason", "null")
+        )
+
+    all_count = _count(base())
+    pending = _count(base().in_("status", PENDING_STATUSES).eq("do_not_contact", False))
+    worked = _count(base().not_.in_("status", PENDING_STATUSES))
+    contacted = _count(base().gt("contact_attempts", 0))
+    followup = _count(
+        base()
+        .not_.is_("next_followup_date", "null")
+        .eq("do_not_contact", False)
+        .not_.in_("status", CLOSED_STATUSES)
+    )
+    do_not_contact = _count(base().eq("do_not_contact", True))
+    discarded = _count(base().in_("status", ["Descartado", "No califica"]))
+    return {
+        "all": all_count,
+        "pending": pending,
+        "worked": worked,
+        "contacted": contacted,
+        "followup": followup,
+        "do_not_contact": do_not_contact,
+        "discarded": discarded,
+    }
+
+
 @app.get("/api/leads")
 def list_leads(
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -359,15 +693,33 @@ def list_leads(
     owner_id: str | None = None,
     followup_due: bool = False,
     include_excluded: bool = False,
+    view: str = Query(default="all", pattern="^(all|pending|worked|contacted|followup|do_not_contact|discarded)$"),
+    work_state: str | None = Query(default=None, pattern="^(all|pending|worked)$"),
 ) -> dict[str, Any]:
     db = get_supabase()
     start = (page - 1) * page_size
     query = db.table("leads").select("*", count="exact").eq("archived", False)
     if not include_excluded:
         query = query.is_("excluded_reason", "null")
-    if search:
-        safe = search.replace(",", " ").strip()
-        query = query.or_(f"business_name.ilike.%{safe}%,address.ilike.%{safe}%,phone.ilike.%{safe}%")
+
+    if work_state and view == "all":
+        view = work_state
+
+    safe = _safe_search_term(search)
+    if safe:
+        pattern = f"*{safe}*"
+        query = query.or_(
+            ",".join(
+                [
+                    f"business_name.ilike.{pattern}",
+                    f"address.ilike.{pattern}",
+                    f"phone.ilike.{pattern}",
+                    f"email.ilike.{pattern}",
+                    f"decision_maker_name.ilike.{pattern}",
+                    f"notes.ilike.{pattern}",
+                ]
+            )
+        )
     if niche:
         query = query.eq("niche", niche)
     if status:
@@ -376,10 +728,43 @@ def list_leads(
         query = query.eq("final_tier", tier)
     if owner_id:
         query = query.eq("owner_id", owner_id)
+
+    if view == "pending":
+        query = query.in_("status", PENDING_STATUSES).eq("do_not_contact", False)
+    elif view == "worked":
+        query = query.not_.in_("status", PENDING_STATUSES)
+    elif view == "contacted":
+        query = query.gt("contact_attempts", 0)
+    elif view == "followup":
+        query = (
+            query.not_.is_("next_followup_date", "null")
+            .eq("do_not_contact", False)
+            .not_.in_("status", CLOSED_STATUSES)
+        )
+    elif view == "do_not_contact":
+        query = query.eq("do_not_contact", True)
+    elif view == "discarded":
+        query = query.in_("status", ["Descartado", "No califica"])
+
     if followup_due:
-        query = query.lte("next_followup_date", date.today().isoformat()).not_.in_("status", ["Descartado", "No interesado", "Implementación vendida"])
-    response = query.order("final_score", desc=True).order("created_at", desc=True).range(start, start + page_size - 1).execute()
-    return {"items": response.data or [], "total": int(response.count or 0), "page": page, "page_size": page_size}
+        query = (
+            query.lte("next_followup_date", date.today().isoformat())
+            .eq("do_not_contact", False)
+            .not_.in_("status", CLOSED_STATUSES)
+        )
+    response = (
+        query.order("final_score", desc=True)
+        .order("created_at", desc=True)
+        .range(start, start + page_size - 1)
+        .execute()
+    )
+    return {
+        "items": response.data or [],
+        "total": int(response.count or 0),
+        "page": page,
+        "page_size": page_size,
+        "view": view,
+    }
 
 
 @app.get("/api/leads/{lead_id}")
@@ -472,30 +857,39 @@ def create_call_log(
 @app.get("/api/call-logs")
 def list_call_logs(
     user: Annotated[CurrentUser, Depends(get_current_user)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=25, ge=1, le=100),
+    search: str | None = None,
     date_from: date | None = None,
     date_to: date | None = None,
+    channel: str | None = None,
+    outcome: str | None = None,
     agent_id: str | None = None,
-    limit: int = Query(default=500, ge=1, le=1000),
-) -> list[dict[str, Any]]:
-    db = get_supabase()
-    query = db.table("call_logs").select("*").order("occurred_at", desc=True).limit(limit)
-    if date_from:
-        query = query.gte("occurred_at", f"{date_from.isoformat()}T00:00:00Z")
-    if date_to:
-        query = query.lte("occurred_at", f"{date_to.isoformat()}T23:59:59Z")
-    if agent_id:
-        query = query.eq("agent_id", agent_id)
-    calls = query.execute().data or []
-    lead_ids = list({call["lead_id"] for call in calls if call.get("lead_id")})
-    leads: dict[str, str] = {}
-    for i in range(0, len(lead_ids), 100):
-        response = db.table("leads").select("id,business_name").in_("id", lead_ids[i:i + 100]).execute()
-        leads.update({row["id"]: row.get("business_name") for row in (response.data or [])})
-    profiles = _profile_map()
-    for call in calls:
-        call["business_name"] = leads.get(call.get("lead_id"), "")
-        call["agent_name"] = profiles.get(str(call.get("agent_id")), "")
-    return calls
+) -> dict[str, Any]:
+    if page_size not in CALL_LOG_PAGE_SIZES:
+        raise HTTPException(status_code=400, detail="El tamaño de página debe ser 25, 50 o 100.")
+    start = (page - 1) * page_size
+    response = (
+        _call_log_query(
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
+            channel=channel,
+            outcome=outcome,
+            agent_id=agent_id,
+            count="exact",
+        )
+        .order("occurred_at", desc=True)
+        .range(start, start + page_size - 1)
+        .execute()
+    )
+    return {
+        "items": response.data or [],
+        "total": int(response.count or 0),
+        "page": page,
+        "page_size": page_size,
+        "page_sizes": CALL_LOG_PAGE_SIZES,
+    }
 
 
 @app.get("/api/followups")
@@ -581,19 +975,35 @@ def export_leads(
     leads = _fetch_all("leads")
     if worked_only:
         leads = [lead for lead in leads if int(lead.get("contact_attempts") or 0) > 0 or lead.get("status") not in {"Nuevo", "Investigando"}]
-    filename = f"leads_{'trabajados_' if worked_only else ''}{date.today().isoformat()}.csv"
+    filename = f"aura-grow_leads_{'trabajados' if worked_only else 'completos'}_{date.today().isoformat()}.csv"
     return csv_response(leads, LEAD_EXPORT_FIELDS, filename)
 
 
 @app.get("/api/export/call-logs")
-def export_call_logs(user: Annotated[CurrentUser, Depends(get_current_user)]) -> Any:
-    calls = _fetch_all("call_logs")
-    profiles = _profile_map()
-    lead_names = {row["id"]: row.get("business_name", "") for row in _fetch_all("leads", "id,business_name")}
-    for call in calls:
-        call["business_name"] = lead_names.get(call.get("lead_id"), "")
-        call["agent_name"] = profiles.get(str(call.get("agent_id")), "")
-    return csv_response(calls, CALL_EXPORT_FIELDS, f"call_log_{date.today().isoformat()}.csv")
+def export_call_logs(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    channel: str | None = None,
+    outcome: str | None = None,
+    agent_id: str | None = None,
+) -> Any:
+    calls = _fetch_filtered_call_logs(
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        channel=channel,
+        outcome=outcome,
+        agent_id=agent_id,
+    )
+    filtered = any([search, date_from, date_to, channel, outcome, agent_id])
+    suffix = "filtrado_" if filtered else ""
+    return csv_response(
+        calls,
+        CALL_EXPORT_FIELDS,
+        f"aura-grow_call_log_{suffix}{date.today().isoformat()}.csv",
+    )
 
 
 @app.get("/api/export/consolidated")
@@ -601,7 +1011,7 @@ def export_consolidated(user: Annotated[CurrentUser, Depends(get_current_user)])
     leads = _fetch_all("leads")
     calls = _fetch_all("call_logs")
     rows, fields = consolidated_rows(leads, calls)
-    return csv_response(rows, fields, f"metricas_consolidadas_{date.today().isoformat()}.csv")
+    return csv_response(rows, fields, f"aura-grow_metricas_consolidadas_{date.today().isoformat()}.csv")
 
 
 @app.exception_handler(Exception)
