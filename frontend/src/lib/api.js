@@ -34,7 +34,7 @@ export async function api(path, options = {}) {
   return payload;
 }
 
-export async function downloadExport(path) {
+export async function downloadExport(path, fallbackFilename = 'aura-grow-export.csv') {
   const token = await accessToken();
   const response = await fetch(`${appConfig.apiBaseUrl}${path}`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -51,8 +51,11 @@ export async function downloadExport(path) {
   }
   const blob = await response.blob();
   const disposition = response.headers.get('content-disposition') || '';
-  const match = disposition.match(/filename="?([^";]+)"?/i);
-  const filename = match?.[1] || 'aura-grow-export.csv';
+  const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const basicMatch = disposition.match(/filename=\"?([^\";]+)\"?/i);
+  const filename = utf8Match?.[1]
+    ? decodeURIComponent(utf8Match[1])
+    : (basicMatch?.[1] || fallbackFilename);
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
