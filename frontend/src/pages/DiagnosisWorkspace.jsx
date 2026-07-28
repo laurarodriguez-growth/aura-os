@@ -8,6 +8,7 @@ import {
   FileSearch,
   FileText,
   FolderOpen,
+  MessageSquareText,
   RefreshCw,
   Route,
   Save,
@@ -18,6 +19,7 @@ import {
 import { Link, NavLink, Navigate, useNavigate, useParams } from 'react-router-dom';
 import AssessmentEditor from '../components/AssessmentEditor';
 import DiagnosisEvidence from '../components/DiagnosisEvidence';
+import DiagnosisInterview from '../components/DiagnosisInterview';
 import DiagnosisFindings from '../components/DiagnosisFindings';
 import DiagnosisRoadmap from '../components/DiagnosisRoadmap';
 import PageHeader from '../components/PageHeader';
@@ -26,6 +28,7 @@ import { api } from '../lib/api';
 const sections = [
   { id: 'summary', label: 'Resumen', icon: BrainCircuit },
   { id: 'evidence', label: 'Evidencias', icon: FolderOpen },
+  { id: 'interview', label: 'Entrevista', icon: MessageSquareText },
   { id: 'icp', label: 'ICP', icon: SearchCheck },
   { id: 'conversion', label: 'Conversión', icon: ClipboardCheck },
   { id: 'process', label: 'Procesos', icon: Settings2 },
@@ -181,7 +184,8 @@ export default function DiagnosisWorkspace() {
 
   let content = null;
   if (section === 'summary') content = renderSummary();
-  else if (section === 'evidence') content = <DiagnosisEvidence diagnosisId={diagnosisId} items={diagnosis.evidence} onChanged={load} />;
+  else if (section === 'evidence') content = <DiagnosisEvidence diagnosisId={diagnosisId} items={diagnosis.evidence} analysis={diagnosis.latest_analysis} questions={diagnosis.interview_questions} onChanged={load} />;
+  else if (section === 'interview') content = <DiagnosisInterview diagnosisId={diagnosisId} items={diagnosis.interview_questions} analysis={diagnosis.latest_analysis} onChanged={load} />;
   else if (['icp', 'conversion', 'process', 'automation'].includes(section)) content = <AssessmentEditor diagnosisId={diagnosisId} section={section} template={templates.sections[section]} assessment={assessmentMap[section]} scoreOptions={templates.score_options} onSaved={assessmentSaved} />;
   else if (section === 'findings') content = <DiagnosisFindings diagnosisId={diagnosisId} items={diagnosis.findings} onChanged={load} />;
   else if (section === 'roadmap') content = <DiagnosisRoadmap diagnosisId={diagnosisId} items={diagnosis.roadmap} profiles={profiles} onChanged={load} />;
@@ -200,7 +204,7 @@ export default function DiagnosisWorkspace() {
       <div className="diagnosis-workspace">
         <aside className="diagnosis-workspace-nav">
           <p className="eyebrow">WORKSPACE</p>
-          {sections.map(({ id, label, icon: Icon }) => <NavLink key={id} to={`/diagnose/${diagnosisId}/${id}`} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={17} /><span>{label}</span>{['icp', 'conversion', 'process', 'automation'].includes(id) && <small>{assessmentMap[id]?.score ?? 0}</small>}</NavLink>)}
+          {sections.map(({ id, label, icon: Icon }) => <NavLink key={id} to={`/diagnose/${diagnosisId}/${id}`} className={({ isActive }) => isActive ? 'active' : ''}><Icon size={17} /><span>{label}</span>{['icp', 'conversion', 'process', 'automation'].includes(id) && <small>{assessmentMap[id]?.score ?? 0}</small>}{id === 'interview' && <small>{(diagnosis.interview_questions || []).filter((item) => item.status === 'pending').length}</small>}</NavLink>)}
         </aside>
         <main className="diagnosis-workspace-content">{content}</main>
       </div>
