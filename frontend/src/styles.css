@@ -1777,3 +1777,283 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   .interview-question-footer label { width: 100%; }
   .interview-savebar { bottom: 4.7rem; }
 }
+
+/* =========================================================
+   AURA OS BRAND SYSTEM · LOGO OFICIAL + LOGIN NEON RGB
+   ========================================================= */
+.aura-logo {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  color: inherit;
+}
+
+.brand-mark {
+  width: 44px;
+  height: 44px;
+  padding: 2px;
+  border-radius: 0;
+  background: transparent;
+  color: var(--accent);
+  box-shadow: none;
+  filter: drop-shadow(0 0 11px rgba(var(--accent-rgb), .28));
+  transition: color .22s ease, filter .22s ease, transform .22s ease;
+}
+.brand-lockup:hover .brand-mark {
+  transform: translateY(-1px) scale(1.025);
+  filter: drop-shadow(0 0 16px rgba(var(--accent-rgb), .42));
+}
+.brand-lockup.large .brand-mark {
+  width: 58px;
+  height: 58px;
+}
+.mobile-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .55rem;
+}
+.mobile-brand-logo {
+  width: 25px;
+  height: 25px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 8px rgba(var(--accent-rgb), .3));
+}
+
+/* Pantalla de acceso: RGB neón sin cambiar el tema interno de Focus/Diagnose. */
+.login-screen {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  background: #070908;
+}
+.login-screen > section {
+  position: relative;
+  z-index: 2;
+}
+.login-neon-field {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 12% 16%, rgba(0, 245, 255, .08), transparent 28%),
+    radial-gradient(circle at 88% 20%, rgba(144, 0, 255, .09), transparent 30%),
+    radial-gradient(circle at 46% 94%, rgba(188, 255, 71, .075), transparent 33%),
+    #070908;
+}
+.neon-orb {
+  position: absolute;
+  width: min(48vw, 650px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: .24;
+  mix-blend-mode: screen;
+  animation: auraNeonDrift 16s ease-in-out infinite alternate;
+}
+.neon-orb-cyan {
+  left: -18%;
+  top: -20%;
+  background: #00f5ff;
+}
+.neon-orb-magenta {
+  right: -18%;
+  top: 6%;
+  background: #ff27d8;
+  animation-delay: -5s;
+  animation-duration: 19s;
+}
+.neon-orb-lime {
+  left: 28%;
+  bottom: -42%;
+  background: #bcff47;
+  animation-delay: -9s;
+  animation-duration: 22s;
+}
+.neon-grid {
+  position: absolute;
+  inset: 0;
+  opacity: .14;
+  background-image:
+    linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px);
+  background-size: 54px 54px;
+  mask-image: linear-gradient(to bottom, transparent, black 22%, black 76%, transparent);
+}
+.login-copy {
+  background:
+    linear-gradient(115deg, rgba(7,9,8,.96), rgba(7,9,8,.72)),
+    transparent;
+  border-right-color: rgba(255,255,255,.09);
+}
+.login-brand-mark,
+.login-icon {
+  animation: auraNeonColor 9s linear infinite;
+}
+.login-brand-mark {
+  filter: drop-shadow(0 0 15px currentColor);
+}
+.login-copy h1 {
+  color: transparent;
+  background: linear-gradient(105deg, #f6fff0 3%, #bcff47 25%, #00f5ff 48%, #b341ff 71%, #ff38d1 92%);
+  background-size: 260% 260%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  animation: auraNeonGradient 12s ease-in-out infinite;
+  text-wrap: balance;
+}
+.login-copy .eyebrow,
+.login-promise > span {
+  animation: auraNeonColor 9s linear infinite;
+}
+.login-panel {
+  background: linear-gradient(145deg, rgba(7,9,8,.4), rgba(7,9,8,.82));
+}
+.login-card {
+  position: relative;
+  isolation: isolate;
+  border: 1px solid transparent;
+  background:
+    linear-gradient(145deg, rgba(16,19,17,.985), rgba(10,13,11,.985)) padding-box,
+    linear-gradient(120deg, #bcff47, #00f5ff, #9000ff, #ff2bd6, #bcff47) border-box;
+  background-size: 100% 100%, 320% 320%;
+  background-position: 0 0, 0% 50%;
+  box-shadow:
+    0 28px 90px rgba(0,0,0,.52),
+    0 0 55px rgba(0,245,255,.055),
+    0 0 85px rgba(144,0,255,.045);
+  animation: auraNeonBorder 10s linear infinite;
+}
+.login-card::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 10%;
+  border-radius: 28px;
+  background: linear-gradient(110deg, rgba(0,245,255,.12), rgba(144,0,255,.12), rgba(255,43,214,.1));
+  filter: blur(40px);
+  opacity: .65;
+}
+.login-icon {
+  width: 64px;
+  height: 64px;
+  padding: 5px;
+  border-radius: 0;
+  background: transparent;
+  filter: drop-shadow(0 0 14px currentColor);
+}
+.login-card input {
+  background: rgba(5,8,7,.8);
+  border-color: rgba(255,255,255,.1);
+}
+.login-card input:focus {
+  border-color: #00eaff;
+  box-shadow:
+    0 0 0 3px rgba(0,234,255,.075),
+    0 0 22px rgba(144,0,255,.08);
+}
+.login-submit {
+  border: 0 !important;
+  color: #071008 !important;
+  background: linear-gradient(100deg, #bcff47, #00f5ff, #8d39ff, #ff38d1, #bcff47) !important;
+  background-size: 300% 300% !important;
+  box-shadow: 0 12px 38px rgba(0,245,255,.11), 0 8px 28px rgba(144,0,255,.1);
+  animation: auraNeonGradient 8s linear infinite;
+}
+.login-submit:hover {
+  box-shadow: 0 15px 44px rgba(0,245,255,.18), 0 10px 34px rgba(255,43,214,.12);
+}
+.security-note {
+  color: #707b73;
+}
+
+/* Logo oficial también durante carga y configuración inicial. */
+.aura-loader {
+  width: 54px;
+  height: 54px;
+  padding: 4px;
+  border: 0;
+  border-radius: 0;
+  color: var(--accent);
+  filter: drop-shadow(0 0 14px rgba(var(--accent-rgb), .38));
+  animation: auraLogoPulse 1.45s ease-in-out infinite;
+}
+.setup-card > .brand-mark {
+  width: 62px;
+  height: 62px;
+}
+
+@keyframes auraNeonColor {
+  0%, 100% { color: #bcff47; }
+  23% { color: #00f5ff; }
+  48% { color: #6e5bff; }
+  72% { color: #ff2bd6; }
+  88% { color: #ff8a35; }
+}
+@keyframes auraNeonGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+@keyframes auraNeonBorder {
+  0% { background-position: 0 0, 0% 50%; }
+  50% { background-position: 0 0, 100% 50%; }
+  100% { background-position: 0 0, 0% 50%; }
+}
+@keyframes auraNeonDrift {
+  0% { transform: translate3d(-2%, -2%, 0) scale(.92); }
+  50% { transform: translate3d(8%, 5%, 0) scale(1.08); }
+  100% { transform: translate3d(-4%, 12%, 0) scale(.98); }
+}
+@keyframes auraLogoPulse {
+  0%, 100% { transform: scale(.92); opacity: .72; }
+  50% { transform: scale(1.04); opacity: 1; }
+}
+
+@media (max-width: 900px) {
+  .login-panel {
+    position: relative;
+    background:
+      radial-gradient(circle at 20% 12%, rgba(0,245,255,.08), transparent 34%),
+      radial-gradient(circle at 80% 85%, rgba(144,0,255,.1), transparent 38%),
+      rgba(7,9,8,.8);
+  }
+  .login-card {
+    padding: 1.45rem;
+  }
+}
+
+@media (max-width: 520px) {
+  .login-panel { padding: 1rem; }
+  .login-card { border-radius: 16px; }
+  .login-icon { width: 56px; height: 56px; }
+  .mobile-brand span { font-size: .68rem; letter-spacing: .09em; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .neon-orb,
+  .login-brand-mark,
+  .login-icon,
+  .login-copy h1,
+  .login-copy .eyebrow,
+  .login-promise > span,
+  .login-card,
+  .login-submit,
+  .aura-loader {
+    animation: none !important;
+  }
+}
+
+/* Logo oficial en el informe premium de Diagnose. */
+.report-brand > .report-brand-logo {
+  width: 52px;
+  height: 52px;
+  padding: 2px;
+  border-radius: 0;
+  background: transparent;
+  color: white;
+  filter: drop-shadow(0 0 12px rgba(255,255,255,.22));
+}

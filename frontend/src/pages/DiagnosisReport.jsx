@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Printer } from 'lucide-react';
 import { Link, useParams } from 'react-router-dom';
 import { api } from '../lib/api';
+import AuraLogo from '../components/AuraLogo';
 
 const sectionLabels = { icp: 'ICP Assessment', conversion: 'Conversion Audit', process: 'Process Analysis', automation: 'Automation Score' };
 const phaseLabels = { '7_days': 'Primeros 7 días', '30_days': 'Próximos 30 días', '90_days': 'Próximos 90 días' };
@@ -31,7 +32,7 @@ export default function DiagnosisReport() {
 
       <article className="diagnosis-report-sheet">
         <header className="report-cover">
-          <div className="report-brand"><span>A</span><div><strong>AURA GROW</strong><small>Diagnose · by Laura Rodriguez</small></div></div>
+          <div className="report-brand"><span className="report-brand-logo"><AuraLogo /></span><div><strong>AURA GROW</strong><small>Diagnose · by Laura Rodriguez</small></div></div>
           <p>DIAGNÓSTICO DE CRECIMIENTO</p>
           <h1>{diagnosis.company_name}</h1>
           <h2>{diagnosis.industry || 'Evaluación estratégica'}</h2>

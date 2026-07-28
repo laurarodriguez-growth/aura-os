@@ -1,5 +1,5 @@
-const CACHE_NAME = 'aura-os-v4-diagnose-analysis-interview';
-const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './favicon.svg'];
+const CACHE_NAME = 'aura-os-v5-official-logo-neon-login';
+const APP_SHELL = ['./', './index.html', './favicon.svg', './aura-os-logo-currentcolor.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL)).catch(() => undefined));

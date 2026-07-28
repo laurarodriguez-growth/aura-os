@@ -1,6 +1,7 @@
 import { useState } from 'react';
-import { ArrowRight, LockKeyhole } from 'lucide-react';
+import { ArrowRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import AuraLogo from '../components/AuraLogo';
 
 export default function Login() {
   const { signIn } = useAuth();
@@ -24,9 +25,15 @@ export default function Login() {
 
   return (
     <main className="login-screen">
+      <div className="login-neon-field" aria-hidden="true">
+        <span className="neon-orb neon-orb-cyan" />
+        <span className="neon-orb neon-orb-magenta" />
+        <span className="neon-orb neon-orb-lime" />
+        <span className="neon-grid" />
+      </div>
       <section className="login-copy">
         <div className="brand-lockup large">
-          <span className="brand-mark">A</span>
+          <span className="brand-mark login-brand-mark"><AuraLogo /></span>
           <div><strong>AURA OS</strong><span>by Laura Rodriguez</span></div>
         </div>
         <p className="eyebrow">CRECIMIENTO · IA · AUTOMATIZACIÓN</p>
@@ -39,14 +46,14 @@ export default function Login() {
 
       <section className="login-panel">
         <form className="login-card" onSubmit={submit}>
-          <div className="login-icon"><LockKeyhole /></div>
+          <div className="login-icon"><AuraLogo /></div>
           <p className="eyebrow">ACCESO PRIVADO</p>
           <h2>Bienvenida a Aura Grow</h2>
           <p className="muted">Usa el usuario que creaste en Supabase.</p>
           {error && <div className="form-error">{error}</div>}
           <label>Correo electrónico<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required autoComplete="email" /></label>
           <label>Contraseña<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required autoComplete="current-password" /></label>
-          <button className="button primary full" disabled={loading}>{loading ? 'Entrando…' : <>Entrar <ArrowRight size={17} /></>}</button>
+          <button className="button primary full login-submit" disabled={loading}>{loading ? 'Entrando…' : <>Entrar <ArrowRight size={17} /></>}</button>
           <small className="security-note">Tu contraseña es gestionada por Supabase Auth y no se guarda en el código.</small>
         </form>
       </section>

@@ -1,10 +1,11 @@
 import { AlertTriangle, FileCode2 } from 'lucide-react';
+import AuraLogo from './AuraLogo';
 
 export default function SetupRequired({ problems }) {
   return (
     <main className="setup-screen">
       <section className="setup-card">
-        <span className="brand-mark">A</span>
+        <span className="brand-mark"><AuraLogo /></span>
         <p className="eyebrow">AURA OS · CONFIGURACIÓN</p>
         <h1>Faltan tres datos para encender la aplicación.</h1>
         <p className="muted">

@@ -22,6 +22,7 @@ import {
 import { NavLink, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import AuraLogo from './AuraLogo';
 
 const executionLinks = [
   { to: '/focus', label: 'Hoy', icon: ListTodo },
@@ -68,7 +69,7 @@ export default function Layout({ children }) {
     <div className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'}`}>
       <header className="mobile-header">
         <button className="icon-button" onClick={() => setOpen(true)} aria-label="Abrir menú"><Menu /></button>
-        <div className="mobile-brand">AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</div>
+        <div className="mobile-brand"><AuraLogo className="mobile-brand-logo" /><span>AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</span></div>
         <span className="avatar small">{firstName[0]}</span>
       </header>
 
@@ -76,7 +77,7 @@ export default function Layout({ children }) {
       <aside className={`sidebar ${open ? 'open' : ''}`}>
         <div className="sidebar-top">
           <div className="brand-lockup">
-            <span className="brand-mark">A</span>
+            <span className="brand-mark"><AuraLogo /></span>
             <div>
               <strong>AURA OS</strong>
               <span>by Laura Rodriguez</span>
