@@ -13,6 +13,8 @@ import {
   ListTodo,
   LogOut,
   Menu,
+  PanelLeftClose,
+  PanelLeftOpen,
   PhoneCall,
   Search,
   Settings,
@@ -20,7 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import AuraLogo from './AuraLogo';
 
@@ -47,7 +49,7 @@ const diagnoseLinks = [
 
 function NavItem({ to, label, icon: Icon, close, end = false }) {
   return (
-    <NavLink end={end} to={to} onClick={close} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+    <NavLink end={end} to={to} onClick={close} title={label} aria-label={label} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
       <Icon size={18} />
       <span>{label}</span>
     </NavLink>
@@ -58,6 +60,9 @@ export default function Layout({ children }) {
   const { profile, signOut } = useAuth();
   const location = useLocation();
   const [open, setOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return window.localStorage.getItem('aura-sidebar-collapsed') === 'true'; } catch { return false; }
+  });
   const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
   const isAdmin = profile?.role === 'admin';
   const diagnoseEnabled = profile?.features?.diagnose === true;
@@ -65,8 +70,14 @@ export default function Layout({ children }) {
 
   const close = () => setOpen(false);
 
+  useEffect(() => {
+    try { window.localStorage.setItem('aura-sidebar-collapsed', String(collapsed)); } catch { /* El navegador puede bloquear almacenamiento local. */ }
+  }, [collapsed]);
+
+  const toggleCollapsed = () => setCollapsed((value) => !value);
+
   return (
-    <div className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'}`}>
+    <div className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'} ${collapsed ? 'sidebar-collapsed' : ''}`}>
       <header className="mobile-header">
         <button className="icon-button" onClick={() => setOpen(true)} aria-label="Abrir menú"><Menu /></button>
         <div className="mobile-brand"><AuraLogo className="mobile-brand-logo" /><span>AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</span></div>
@@ -75,6 +86,16 @@ export default function Layout({ children }) {
 
       {open && <button className="sidebar-backdrop" onClick={close} aria-label="Cerrar menú" />}
       <aside className={`sidebar ${open ? 'open' : ''}`}>
+        <button
+          type="button"
+          className="sidebar-collapse-button desktop-only"
+          onClick={toggleCollapsed}
+          aria-label={collapsed ? 'Expandir menú principal' : 'Ocultar menú principal'}
+          aria-expanded={!collapsed}
+          title={collapsed ? 'Expandir menú' : 'Ocultar menú'}
+        >
+          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+        </button>
         <div className="sidebar-top">
           <div className="brand-lockup">
             <span className="brand-mark"><AuraLogo /></span>
@@ -87,12 +108,12 @@ export default function Layout({ children }) {
         </div>
 
         <div className="module-switcher" aria-label="Cambiar experiencia de Aura Grow">
-          <NavLink to="/focus" onClick={close} className={!diagnoseMode ? 'module-option active focus-option' : 'module-option focus-option'}>
+          <NavLink to="/focus" onClick={close} title="Focus" aria-label="Focus" className={!diagnoseMode ? 'module-option active focus-option' : 'module-option focus-option'}>
             <ListChecks size={17} />
             <div><small>AURA GROW</small><strong>Focus</strong></div>
           </NavLink>
           {diagnoseEnabled && (
-            <NavLink to="/diagnose" onClick={close} className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}>
+            <NavLink to="/diagnose" onClick={close} title="Diagnose" aria-label="Diagnose" className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}>
               <BrainCircuit size={17} />
               <div><small>AURA GROW</small><strong>Diagnose</strong></div>
             </NavLink>
