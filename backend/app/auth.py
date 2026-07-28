@@ -65,3 +65,29 @@ def require_admin(user: Annotated[CurrentUser, Depends(get_current_user)]) -> Cu
     if user.role != "admin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Esta acción requiere rol administrador")
     return user
+
+
+def user_feature_enabled(user_id: str, feature_key: str) -> bool:
+    """Return true only when this exact user has the feature enabled."""
+    try:
+        response = (
+            get_supabase().table("user_feature_access")
+            .select("enabled")
+            .eq("user_id", user_id)
+            .eq("feature_key", feature_key)
+            .limit(1)
+            .execute()
+        )
+    except Exception:
+        return False
+    rows = response.data or []
+    return bool(rows and rows[0].get("enabled") is True)
+
+
+def require_diagnose(user: Annotated[CurrentUser, Depends(get_current_user)]) -> CurrentUser:
+    if not user_feature_enabled(user.id, "diagnose"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Diagnose no está habilitado para este usuario",
+        )
+    return user

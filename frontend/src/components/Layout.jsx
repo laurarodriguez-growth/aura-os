@@ -59,7 +59,8 @@ export default function Layout({ children }) {
   const [open, setOpen] = useState(false);
   const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
   const isAdmin = profile?.role === 'admin';
-  const diagnoseMode = location.pathname.startsWith('/diagnose');
+  const diagnoseEnabled = profile?.features?.diagnose === true;
+  const diagnoseMode = diagnoseEnabled && location.pathname.startsWith('/diagnose');
 
   const close = () => setOpen(false);
 
@@ -89,7 +90,7 @@ export default function Layout({ children }) {
             <ListChecks size={17} />
             <div><small>AURA GROW</small><strong>Focus</strong></div>
           </NavLink>
-          {isAdmin && (
+          {diagnoseEnabled && (
             <NavLink to="/diagnose" onClick={close} className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}>
               <BrainCircuit size={17} />
               <div><small>AURA GROW</small><strong>Diagnose</strong></div>

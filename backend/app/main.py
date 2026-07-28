@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .auditor import audit_website
-from .auth import CurrentUser, get_current_user, require_admin
+from .auth import CurrentUser, get_current_user, require_admin, user_feature_enabled
 from .config import get_settings
 from .db import get_supabase
 from .diagnose import router as diagnose_router
@@ -467,9 +467,36 @@ def _active_admin_count() -> int:
     return int(rows.count or 0)
 
 
+def _feature_access_map(feature_key: str) -> dict[str, bool]:
+    try:
+        rows = (
+            get_supabase().table("user_feature_access")
+            .select("user_id,enabled")
+            .eq("feature_key", feature_key)
+            .execute()
+            .data or []
+        )
+    except Exception:
+        return {}
+    return {str(row.get("user_id")): bool(row.get("enabled")) for row in rows}
+
+
+def _set_user_feature(user_id: str, feature_key: str, enabled: bool, granted_by: str) -> None:
+    now = utcnow_iso()
+    get_supabase().table("user_feature_access").upsert({
+        "user_id": user_id,
+        "feature_key": feature_key,
+        "enabled": bool(enabled),
+        "granted_by": granted_by if enabled else None,
+        "granted_at": now if enabled else None,
+        "updated_at": now,
+    }, on_conflict="user_id,feature_key").execute()
+
+
 def _admin_user_rows() -> list[dict[str, Any]]:
     profile_rows = _fetch_all("profiles", "id,full_name,role,is_active,created_at,updated_at")
     profile_map = {str(row["id"]): row for row in profile_rows}
+    diagnose_access = _feature_access_map("diagnose")
     items: list[dict[str, Any]] = []
     for auth_user in _list_auth_users():
         user_id = str(_model_value(auth_user, "id") or "")
@@ -492,6 +519,7 @@ def _admin_user_rows() -> list[dict[str, Any]]:
             "assigned_leads": activity["assigned_leads"],
             "search_jobs": activity["search_jobs"],
             "can_delete": sum(activity.values()) == 0,
+            "diagnose_enabled": diagnose_access.get(user_id, False),
         })
     return sorted(items, key=lambda item: (not item["is_active"], item["full_name"].lower()))
 
@@ -502,7 +530,13 @@ def health() -> dict[str, str]:
 
 @app.get("/api/me")
 def me(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any]:
-    return {"id": user.id, "email": user.email, "full_name": user.full_name, "role": user.role}
+    return {
+        "id": user.id,
+        "email": user.email,
+        "full_name": user.full_name,
+        "role": user.role,
+        "features": {"diagnose": user_feature_enabled(user.id, "diagnose")},
+    }
 
 
 @app.get("/api/profiles")
@@ -551,6 +585,7 @@ def admin_create_user(
             "is_active": True,
             "updated_at": utcnow_iso(),
         }).execute()
+        _set_user_feature(created_id, "diagnose", payload.diagnose_enabled, user.id)
     except Exception as exc:
         if created_id:
             try:
@@ -578,6 +613,7 @@ def admin_update_user(
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
     values = payload.model_dump(exclude_none=True)
+    diagnose_enabled = values.pop("diagnose_enabled", None)
     next_role = values.get("role")
     if target_user_id == user.id and next_role and next_role != "admin":
         raise HTTPException(status_code=400, detail="No puedes quitarte tu propio rol de administradora")
@@ -598,6 +634,9 @@ def admin_update_user(
             db.auth.admin.update_user_by_id(target_user_id, {"password": password})
         except Exception as exc:
             raise HTTPException(status_code=400, detail=f"No se pudo actualizar la contraseña: {exc}") from exc
+
+    if diagnose_enabled is not None:
+        _set_user_feature(target_user_id, "diagnose", diagnose_enabled, user.id)
 
     return next((item for item in _admin_user_rows() if item["id"] == target_user_id), {"id": target_user_id})
 

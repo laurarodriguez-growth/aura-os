@@ -30,6 +30,7 @@ function ProtectedApp() {
   if (!profile) return <LoadingScreen text="Cargando tu perfil…" />;
 
   const isAdmin = profile.role === 'admin';
+  const diagnoseEnabled = profile.features?.diagnose === true;
 
   return (
     <Layout>
@@ -45,13 +46,13 @@ function ProtectedApp() {
         <Route path="/dashboard" element={<Navigate to="/performance" replace />} />
         <Route path="/exports" element={isAdmin ? <Exports /> : <Navigate to="/focus" replace />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/diagnose" element={isAdmin ? <DiagnoseHome /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/new" element={isAdmin ? <DiagnoseNew /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/list" element={isAdmin ? <Diagnoses /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/reports" element={isAdmin ? <DiagnoseReports /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/:diagnosisId/report/print" element={isAdmin ? <DiagnosisReport /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/:diagnosisId/:section" element={isAdmin ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
-        <Route path="/diagnose/:diagnosisId" element={isAdmin ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose" element={diagnoseEnabled ? <DiagnoseHome /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/new" element={diagnoseEnabled ? <DiagnoseNew /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/list" element={diagnoseEnabled ? <Diagnoses /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/reports" element={diagnoseEnabled ? <DiagnoseReports /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId/report/print" element={diagnoseEnabled ? <DiagnosisReport /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId/:section" element={diagnoseEnabled ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId" element={diagnoseEnabled ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>

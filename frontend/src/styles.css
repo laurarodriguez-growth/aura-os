@@ -1626,3 +1626,63 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   .report-section { padding: 18mm; }
   .report-findings article, .report-roadmap-phase article { break-inside: avoid; }
 }
+
+
+/* Acceso individual a features */
+.feature-access-control {
+  display: flex !important;
+  align-items: stretch;
+  gap: 0;
+  cursor: pointer;
+  min-width: 0;
+}
+.feature-access-control > input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.feature-access-copy {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  padding: .62rem .72rem;
+  border: 1px solid var(--line);
+  border-radius: .65rem;
+  background: rgba(255,255,255,.018);
+  color: var(--muted);
+  transition: border-color .18s ease, background .18s ease, color .18s ease, box-shadow .18s ease;
+}
+.feature-access-copy > span { display: grid; gap: .12rem; }
+.feature-access-copy strong { color: var(--text); font-size: .72rem; }
+.feature-access-copy small { color: var(--muted); font-size: .59rem; line-height: 1.25; }
+.feature-access-control input:checked + .feature-access-copy {
+  border-color: rgba(144,0,255,.72);
+  background: rgba(144,0,255,.12);
+  color: var(--diagnose-accent, #9000ff);
+  box-shadow: inset 0 0 0 1px rgba(144,0,255,.12);
+}
+.feature-access-control input:focus-visible + .feature-access-copy { outline: 2px solid var(--diagnose-accent, #9000ff); outline-offset: 2px; }
+.diagnose-access-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .25rem;
+  padding: .18rem .4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(144,0,255,.5);
+  color: #c987ff;
+  background: rgba(144,0,255,.1);
+  font-size: .55rem;
+  font-weight: 700;
+}
+.user-admin-fields { grid-template-columns: repeat(4, minmax(0,1fr)); }
+.user-create-form { grid-template-columns: repeat(5, minmax(0,1fr)); }
+.create-feature-access { align-self: end; }
+@media (max-width: 1180px) {
+  .user-admin-fields { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .user-create-form { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+@media (max-width: 680px) {
+  .user-admin-fields, .user-create-form { grid-template-columns: 1fr; }
+}

@@ -1,4 +1,36 @@
--- Aura Grow Diagnose V1
+-- Aura Grow Diagnose V1 · acceso individual por usuario
+
+-- Acceso individual por feature. Diagnose no depende del rol del usuario.
+create table if not exists public.user_feature_access (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  feature_key text not null,
+  enabled boolean not null default false,
+  granted_by uuid references auth.users(id) on delete set null,
+  granted_at timestamptz,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, feature_key),
+  constraint user_feature_access_key_check check (feature_key in ('diagnose'))
+);
+
+create index if not exists user_feature_access_enabled_idx
+  on public.user_feature_access(feature_key, enabled, user_id);
+
+alter table public.user_feature_access enable row level security;
+grant all on public.user_feature_access to service_role;
+
+-- Habilitar Diagnose únicamente para Laura en esta instalación inicial.
+-- El acceso después se administra por persona desde Mi cuenta → Gestión de usuarios.
+insert into public.user_feature_access (user_id, feature_key, enabled, granted_by, granted_at, updated_at)
+select id, 'diagnose', true, id, now(), now()
+from auth.users
+where id = 'aceaef58-0663-4483-ad5f-d77a2162fd87'::uuid
+on conflict (user_id, feature_key) do update
+set enabled = excluded.enabled,
+    granted_by = excluded.granted_by,
+    granted_at = excluded.granted_at,
+    updated_at = now();
+
 -- Migración aditiva: no borra ni modifica los datos operativos de Focus.
 -- Ejecutar una sola vez en Supabase > SQL Editor > New query > Run.
 
@@ -164,6 +196,10 @@ on conflict (id) do update set
 -- updated_at automático.
 do $$
 begin
+  if not exists (select 1 from pg_trigger where tgname = 'user_feature_access_set_updated_at') then
+    create trigger user_feature_access_set_updated_at before update on public.user_feature_access
+      for each row execute function public.set_updated_at();
+  end if;
   if not exists (select 1 from pg_trigger where tgname = 'diagnoses_set_updated_at') then
     create trigger diagnoses_set_updated_at before update on public.diagnoses
     for each row execute procedure public.set_updated_at();

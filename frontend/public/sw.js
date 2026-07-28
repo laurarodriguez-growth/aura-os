@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aura-os-v3-diagnose-1';
+const CACHE_NAME = 'aura-os-v3-diagnose-1-user-access';
 const APP_SHELL = ['./', './index.html', './manifest.webmanifest', './favicon.svg'];
 
 self.addEventListener('install', (event) => {

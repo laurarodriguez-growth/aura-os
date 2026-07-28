@@ -13,6 +13,7 @@ import {
   UserPlus,
   Users,
   UserX,
+  ScanSearch,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import { appConfig } from '../lib/config';
@@ -25,6 +26,7 @@ const emptyNewUser = {
   email: '',
   password: '',
   role: 'setter',
+  diagnose_enabled: false,
 };
 
 function readableDate(value) {
@@ -44,7 +46,7 @@ function roleLabel(role) {
 }
 
 export default function Settings() {
-  const { profile } = useAuth();
+  const { profile, refreshProfile } = useAuth();
   const [password, setPassword] = useState('');
   const [confirmation, setConfirmation] = useState('');
   const [busy, setBusy] = useState(false);
@@ -68,6 +70,7 @@ export default function Settings() {
       full_name: item.full_name || '',
       role: item.role || 'agent',
       password: '',
+      diagnose_enabled: Boolean(item.diagnose_enabled),
     }])));
   };
 
@@ -158,6 +161,7 @@ export default function Settings() {
       const payload = {
         full_name: draft.full_name,
         role: draft.role,
+        diagnose_enabled: Boolean(draft.diagnose_enabled),
       };
       if (draft.password) payload.password = draft.password;
       await api(`/api/admin/users/${id}`, {
@@ -168,6 +172,7 @@ export default function Settings() {
         ? 'Usuario actualizado y contraseña temporal reemplazada.'
         : 'Usuario actualizado correctamente.');
       await loadUsers();
+      if (id === profile?.id) await refreshProfile();
     } catch (saveError) {
       setUserError(saveError.message || 'No se pudo actualizar el usuario.');
     } finally {
@@ -287,7 +292,7 @@ export default function Settings() {
               <div>
                 <p className="eyebrow">ADMINISTRACIÓN</p>
                 <h2>Gestión de usuarios</h2>
-                <p>Crea accesos, cambia roles, restablece contraseñas y desactiva cuentas sin perder su historial.</p>
+                <p>Crea accesos, cambia roles y habilita funciones de forma individual para cada persona.</p>
               </div>
             </div>
             <div className="user-management-actions">
@@ -314,6 +319,17 @@ export default function Settings() {
                   <option value="admin">Administradora</option>
                 </select>
               </label>
+              <label className="feature-access-control create-feature-access">
+                <input
+                  type="checkbox"
+                  checked={newUser.diagnose_enabled}
+                  onChange={(event) => setNewUser({ ...newUser, diagnose_enabled: event.target.checked })}
+                />
+                <span className="feature-access-copy">
+                  <ScanSearch size={17} />
+                  <span><strong>Habilitar Diagnose</strong><small>Acceso individual, independiente del rol.</small></span>
+                </span>
+              </label>
               <button className="button primary" type="submit" disabled={userBusy === 'create'}>
                 <UserPlus size={16} />{userBusy === 'create' ? 'Creando…' : 'Crear y confirmar'}
               </button>
@@ -339,6 +355,7 @@ export default function Settings() {
                           <strong>{item.full_name}</strong>
                           {isSelf && <span className="self-badge">Tu cuenta</span>}
                           <span className={`user-status ${item.is_active ? 'active' : 'inactive'}`}>{item.is_active ? 'Activo' : 'Desactivado'}</span>
+                          {item.diagnose_enabled && <span className="diagnose-access-badge"><ScanSearch size={12} />Diagnose</span>}
                         </div>
                         <p>{item.email}</p>
                         <small>Último acceso: {readableDate(item.last_sign_in_at)}</small>
@@ -358,6 +375,17 @@ export default function Settings() {
                       </label>
                       <label>Nueva contraseña temporal
                         <input type="password" minLength="8" value={draft.password || ''} onChange={(event) => updateDraft(item.id, 'password', event.target.value)} placeholder="Déjala vacía para no cambiarla" />
+                      </label>
+                      <label className="feature-access-control user-feature-access">
+                        <input
+                          type="checkbox"
+                          checked={Boolean(draft.diagnose_enabled)}
+                          onChange={(event) => updateDraft(item.id, 'diagnose_enabled', event.target.checked)}
+                        />
+                        <span className="feature-access-copy">
+                          <ScanSearch size={17} />
+                          <span><strong>Diagnose</strong><small>Habilitar solo para esta persona.</small></span>
+                        </span>
                       </label>
                     </div>
 
