@@ -2057,3 +2057,370 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   color: white;
   filter: drop-shadow(0 0 12px rgba(255,255,255,.22));
 }
+
+
+/* =========================================================
+   AURA OS · SIDEBAR V3
+   Navegación compacta, estable y adaptable a Focus/Diagnose.
+   ========================================================= */
+:root {
+  --sidebar-expanded: 272px;
+  --sidebar-collapsed: 86px;
+}
+
+.desktop-only { display: grid; }
+
+.sidebar-v3 {
+  width: var(--sidebar-expanded);
+  padding: 1rem .75rem .8rem;
+  overflow: visible;
+  transition: width .24s cubic-bezier(.2,.8,.2,1), padding .24s cubic-bezier(.2,.8,.2,1), background .2s ease;
+}
+
+.sidebar-v3 .sidebar-top-v3 {
+  min-height: 58px;
+  padding: .15rem .25rem .85rem;
+  gap: .55rem;
+  border-bottom: 1px solid transparent;
+}
+
+.sidebar-v3 .brand-lockup {
+  min-width: 0;
+  text-decoration: none;
+}
+
+.sidebar-v3 .brand-copy {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-v3 .sidebar-top-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.sidebar-toggle-v3 {
+  appearance: none;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.025);
+  color: var(--muted);
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.025);
+  transition: color .18s ease, border-color .18s ease, background .18s ease, transform .18s ease, box-shadow .18s ease;
+}
+
+.sidebar-toggle-v3:hover {
+  color: var(--text);
+  border-color: rgba(var(--accent-rgb),.34);
+  background: rgba(var(--accent-rgb),.07);
+  box-shadow: 0 0 0 4px rgba(var(--accent-rgb),.045);
+}
+
+.sidebar-toggle-v3:active { transform: scale(.94); }
+.sidebar-toggle-v3:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.sidebar-v3 .module-switcher {
+  margin: .25rem 0 .8rem;
+}
+
+.sidebar-v3 .module-option,
+.sidebar-v3 .nav-link,
+.sidebar-v3 .user-card,
+.main-content {
+  transition: margin-left .24s cubic-bezier(.2,.8,.2,1), width .24s cubic-bezier(.2,.8,.2,1), padding .24s cubic-bezier(.2,.8,.2,1), gap .2s ease, background .18s ease, border-color .18s ease;
+}
+
+.sidebar-v3 .nav-link,
+.sidebar-v3 .module-option {
+  position: relative;
+}
+
+.main-content {
+  margin-left: var(--sidebar-expanded);
+}
+
+/* Rail compacto */
+.app-shell.sidebar-collapsed .sidebar-v3 {
+  width: var(--sidebar-collapsed);
+  padding-left: .62rem;
+  padding-right: .62rem;
+}
+
+.app-shell.sidebar-collapsed .main-content {
+  margin-left: var(--sidebar-collapsed);
+}
+
+.app-shell.sidebar-collapsed .sidebar-top-v3 {
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  gap: .48rem;
+  padding-left: 0;
+  padding-right: 0;
+  padding-bottom: .75rem;
+  border-bottom-color: var(--border-soft);
+}
+
+.app-shell.sidebar-collapsed .brand-lockup { justify-content: center; gap: 0; }
+.app-shell.sidebar-collapsed .brand-mark { width: 42px; height: 42px; }
+.app-shell.sidebar-collapsed .sidebar-top-actions { justify-content: center; }
+.app-shell.sidebar-collapsed .sidebar-toggle-v3 { width: 32px; height: 32px; flex-basis: 32px; }
+
+.app-shell.sidebar-collapsed .sidebar-label,
+.app-shell.sidebar-collapsed .nav-caption {
+  display: none !important;
+}
+
+.app-shell.sidebar-collapsed .module-switcher {
+  gap: .4rem;
+  margin-top: .7rem;
+}
+
+.app-shell.sidebar-collapsed .module-option,
+.app-shell.sidebar-collapsed .nav-link {
+  min-height: 46px;
+  justify-content: center;
+  gap: 0;
+  padding: .62rem;
+  border-radius: 12px;
+}
+
+.app-shell.sidebar-collapsed .module-option svg,
+.app-shell.sidebar-collapsed .nav-link svg {
+  flex: 0 0 auto;
+}
+
+.app-shell.sidebar-collapsed .sidebar-nav {
+  overflow: visible;
+  padding-right: 0;
+}
+
+.app-shell.sidebar-collapsed .sidebar-footer .nav-link { justify-content: center; }
+
+.app-shell.sidebar-collapsed .user-card {
+  display: grid;
+  grid-template-columns: 1fr;
+  justify-items: center;
+  gap: .42rem;
+  padding: .55rem .35rem;
+}
+
+.app-shell.sidebar-collapsed .user-card .icon-button {
+  width: 31px;
+  height: 31px;
+}
+
+/* Indicación activa más clara en el rail. */
+.app-shell.sidebar-collapsed .nav-link.active::before,
+.app-shell.sidebar-collapsed .module-option.active::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  width: 3px;
+  height: 22px;
+  border-radius: 0 999px 999px 0;
+  transform: translateY(-50%);
+  background: var(--accent);
+  box-shadow: 0 0 14px rgba(var(--accent-rgb),.55);
+}
+
+/* Tooltip profesional en modo compacto. */
+.app-shell.sidebar-collapsed .sidebar-v3 [data-sidebar-tooltip]::after {
+  content: attr(data-sidebar-tooltip);
+  position: absolute;
+  z-index: 90;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translate(6px,-50%);
+  padding: .5rem .65rem;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: rgba(16,19,17,.98);
+  color: var(--text);
+  font-size: .72rem;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  box-shadow: 0 12px 35px rgba(0,0,0,.42);
+  transition: opacity .14s ease, transform .14s ease, visibility .14s ease;
+}
+
+.app-shell.sidebar-collapsed .sidebar-v3 [data-sidebar-tooltip]:hover::after,
+.app-shell.sidebar-collapsed .sidebar-v3 [data-sidebar-tooltip]:focus-visible::after {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(0,-50%);
+}
+
+.diagnose-mode.sidebar-collapsed .sidebar-v3 [data-sidebar-tooltip]::after {
+  border-color: rgba(144,0,255,.28);
+  box-shadow: 0 12px 35px rgba(0,0,0,.42), 0 0 22px rgba(144,0,255,.09);
+}
+
+/* Mobile: drawer completo; el estado compacto de escritorio no interfiere. */
+@media (max-width: 900px) {
+  .desktop-only { display: none !important; }
+
+  .sidebar-v3,
+  .app-shell.sidebar-collapsed .sidebar-v3 {
+    width: min(290px, 88vw);
+    padding: 1rem .85rem;
+    transform: translateX(-104%);
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+
+  .sidebar-v3.open,
+  .app-shell.sidebar-collapsed .sidebar-v3.open {
+    transform: translateX(0);
+  }
+
+  .main-content,
+  .app-shell.sidebar-collapsed .main-content {
+    margin-left: 0;
+  }
+
+  .app-shell.sidebar-collapsed .sidebar-top-v3 {
+    display: flex;
+    justify-content: space-between;
+    padding: .15rem .25rem .85rem;
+    border-bottom-color: transparent;
+  }
+
+  .app-shell.sidebar-collapsed .brand-lockup { justify-content: flex-start; gap: .8rem; }
+  .app-shell.sidebar-collapsed .brand-mark { width: 44px; height: 44px; }
+  .app-shell.sidebar-collapsed .sidebar-label,
+  .app-shell.sidebar-collapsed .nav-caption { display: block !important; }
+
+  .app-shell.sidebar-collapsed .module-option,
+  .app-shell.sidebar-collapsed .nav-link {
+    justify-content: flex-start;
+    gap: .68rem;
+    padding: .7rem .75rem;
+  }
+
+  .app-shell.sidebar-collapsed .user-card {
+    grid-template-columns: auto 1fr auto;
+    justify-items: stretch;
+    gap: .65rem;
+    padding: .7rem;
+  }
+
+  .app-shell.sidebar-collapsed .nav-link.active::before,
+  .app-shell.sidebar-collapsed .module-option.active::before,
+  .app-shell.sidebar-collapsed .sidebar-v3 [data-sidebar-tooltip]::after {
+    display: none;
+  }
+
+  .diagnose-mode .main-content {
+    width: 100%;
+    max-width: none;
+    padding: 1rem .78rem 6.9rem;
+    overflow-x: hidden;
+  }
+
+  .diagnose-mode .page-header { margin-bottom: 1rem; }
+  .diagnose-mode .page-header h1 { font-size: clamp(1.75rem, 8vw, 2.5rem); overflow-wrap: anywhere; }
+  .diagnosis-workspace { display: block; width: 100%; }
+  .diagnosis-workspace-nav {
+    position: sticky;
+    top: 58px;
+    z-index: 24;
+    width: calc(100vw - 1.56rem);
+    max-width: none;
+    display: flex;
+    align-items: center;
+    gap: .35rem;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+    scrollbar-width: none;
+    padding: .5rem;
+    margin-bottom: .8rem;
+    border-radius: 13px;
+    background: rgba(13,12,16,.96);
+    backdrop-filter: blur(18px);
+  }
+  .diagnosis-workspace-nav::-webkit-scrollbar { display: none; }
+  .diagnosis-workspace-nav .eyebrow { display: none; }
+  .diagnosis-workspace-nav a {
+    flex: 0 0 auto;
+    min-width: max-content;
+    padding: .66rem .76rem;
+    border-radius: 9px;
+  }
+  .diagnosis-workspace-nav a span:first-of-type { display: inline; }
+  .diagnosis-workspace-content { min-width: 0; width: 100%; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-v3,
+  .main-content,
+  .sidebar-toggle-v3,
+  .sidebar-v3 .module-option,
+  .sidebar-v3 .nav-link,
+  .sidebar-v3 .user-card {
+    transition: none !important;
+  }
+}
+
+/* Diagnose: detalles adicionales para teléfonos pequeños. */
+@media (max-width: 900px) {
+  .diagnosis-section-stack,
+  .diagnose-analysis-result,
+  .interview-section,
+  .interview-question-list { width: 100%; min-width: 0; }
+  .diagnose-analysis-result,
+  .diagnosis-summary-form,
+  .diagnose-lead-picker,
+  .diagnose-create-form { padding: .82rem; }
+  .analysis-result-header,
+  .evidence-heading,
+  .interview-heading { gap: .7rem; }
+  .analysis-signal-card blockquote,
+  .diagnosis-workspace p,
+  .diagnosis-workspace h2,
+  .diagnosis-workspace h3 { overflow-wrap: anywhere; }
+  .analysis-mini-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .assessment-suggestion-list > div { min-width: 0; }
+  .diagnose-mobile-nav {
+    background: rgba(13,12,16,.96);
+    border-top-color: rgba(144,0,255,.22);
+  }
+  .diagnose-mobile-nav a.active { color: #c767ff; }
+}
+
+@media (max-width: 620px) {
+  .diagnose-mode .mobile-brand span { font-size: .66rem; letter-spacing: .08em; }
+  .diagnosis-workspace-nav a { font-size: .68rem; }
+  .diagnosis-score-overview,
+  .diagnose-metric-grid,
+  .interview-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .analysis-mini-metrics { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  .analysis-mini-metrics span { min-width: 0; padding: .52rem .38rem; }
+  .analysis-mini-metrics strong { font-size: .95rem; }
+  .assessment-suggestion-list > div { grid-template-columns: 1fr 42px; }
+  .assessment-suggestion-list > div span,
+  .assessment-suggestion-list > div strong { grid-column: 1; }
+  .assessment-suggestion-list > div em { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+  .assessment-suggestion-list > div p { grid-column: 1 / -1; }
+  .interview-question-card { padding: .75rem; }
+  .interview-savebar {
+    left: .7rem;
+    right: .7rem;
+    bottom: 4.9rem;
+    width: auto;
+  }
+}

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aura-os-v5-official-logo-neon-login';
+const CACHE_NAME = 'aura-os-v7-sidebar-v3';
 const APP_SHELL = ['./', './index.html', './favicon.svg', './aura-os-logo-currentcolor.svg'];
 
 self.addEventListener('install', (event) => {

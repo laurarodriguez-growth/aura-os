@@ -49,9 +49,17 @@ const diagnoseLinks = [
 
 function NavItem({ to, label, icon: Icon, close, end = false }) {
   return (
-    <NavLink end={end} to={to} onClick={close} title={label} aria-label={label} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
-      <Icon size={18} />
-      <span>{label}</span>
+    <NavLink
+      end={end}
+      to={to}
+      onClick={close}
+      title={label}
+      aria-label={label}
+      data-sidebar-tooltip={label}
+      className={({ isActive }) => (isActive ? 'nav-link active' : 'nav-link')}
+    >
+      <Icon size={18} aria-hidden="true" />
+      <span className="sidebar-label">{label}</span>
     </NavLink>
   );
 }
@@ -59,63 +67,120 @@ function NavItem({ to, label, icon: Icon, close, end = false }) {
 export default function Layout({ children }) {
   const { profile, signOut } = useAuth();
   const location = useLocation();
-  const [open, setOpen] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
-    try { return window.localStorage.getItem('aura-sidebar-collapsed') === 'true'; } catch { return false; }
+    try {
+      return window.localStorage.getItem('aura-sidebar-collapsed') === 'true';
+    } catch {
+      return false;
+    }
   });
+
   const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
   const isAdmin = profile?.role === 'admin';
   const diagnoseEnabled = profile?.features?.diagnose === true;
   const diagnoseMode = diagnoseEnabled && location.pathname.startsWith('/diagnose');
 
-  const close = () => setOpen(false);
+  const closeMobile = () => setMobileOpen(false);
+  const toggleCollapsed = () => setCollapsed((current) => !current);
 
   useEffect(() => {
-    try { window.localStorage.setItem('aura-sidebar-collapsed', String(collapsed)); } catch { /* El navegador puede bloquear almacenamiento local. */ }
+    closeMobile();
+  }, [location.pathname]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem('aura-sidebar-collapsed', String(collapsed));
+    } catch {
+      // Aura sigue funcionando aunque el navegador bloquee localStorage.
+    }
   }, [collapsed]);
 
-  const toggleCollapsed = () => setCollapsed((value) => !value);
+  useEffect(() => {
+    const onShortcut = (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'b') {
+        event.preventDefault();
+        toggleCollapsed();
+      }
+    };
+    window.addEventListener('keydown', onShortcut);
+    return () => window.removeEventListener('keydown', onShortcut);
+  }, []);
 
   return (
-    <div className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'} ${collapsed ? 'sidebar-collapsed' : ''}`}>
+    <div
+      className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'} ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}
+    >
       <header className="mobile-header">
-        <button className="icon-button" onClick={() => setOpen(true)} aria-label="Abrir menú"><Menu /></button>
-        <div className="mobile-brand"><AuraLogo className="mobile-brand-logo" /><span>AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</span></div>
+        <button className="icon-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
+          <Menu />
+        </button>
+        <div className="mobile-brand">
+          <AuraLogo className="mobile-brand-logo" />
+          <span>AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</span>
+        </div>
         <span className="avatar small">{firstName[0]}</span>
       </header>
 
-      {open && <button className="sidebar-backdrop" onClick={close} aria-label="Cerrar menú" />}
-      <aside className={`sidebar ${open ? 'open' : ''}`}>
-        <button
-          type="button"
-          className="sidebar-collapse-button desktop-only"
-          onClick={toggleCollapsed}
-          aria-label={collapsed ? 'Expandir menú principal' : 'Ocultar menú principal'}
-          aria-expanded={!collapsed}
-          title={collapsed ? 'Expandir menú' : 'Ocultar menú'}
-        >
-          {collapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
-        </button>
-        <div className="sidebar-top">
-          <div className="brand-lockup">
+      {mobileOpen && <button className="sidebar-backdrop" onClick={closeMobile} aria-label="Cerrar menú" />}
+
+      <aside className={`sidebar sidebar-v3 ${mobileOpen ? 'open' : ''}`} aria-label="Navegación principal">
+        <div className="sidebar-top sidebar-top-v3">
+          <NavLink
+            to={diagnoseMode ? '/diagnose' : '/focus'}
+            className="brand-lockup"
+            onClick={closeMobile}
+            title="Aura OS"
+            aria-label="Ir al inicio de Aura Grow"
+          >
             <span className="brand-mark"><AuraLogo /></span>
-            <div>
+            <div className="brand-copy sidebar-label">
               <strong>AURA OS</strong>
               <span>by Laura Rodriguez</span>
             </div>
+          </NavLink>
+
+          <div className="sidebar-top-actions">
+            <button
+              type="button"
+              className="sidebar-toggle-v3 desktop-only"
+              onClick={toggleCollapsed}
+              aria-label={collapsed ? 'Expandir menú principal' : 'Compactar menú principal'}
+              aria-expanded={!collapsed}
+              title={`${collapsed ? 'Expandir' : 'Compactar'} menú · Ctrl+B`}
+            >
+              {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
+            <button className="icon-button mobile-only" onClick={closeMobile} aria-label="Cerrar menú">
+              <X />
+            </button>
           </div>
-          <button className="icon-button mobile-only" onClick={close} aria-label="Cerrar menú"><X /></button>
         </div>
 
         <div className="module-switcher" aria-label="Cambiar experiencia de Aura Grow">
-          <NavLink to="/focus" onClick={close} title="Focus" aria-label="Focus" className={!diagnoseMode ? 'module-option active focus-option' : 'module-option focus-option'}>
-            <ListChecks size={17} />
-            <div><small>AURA GROW</small><strong>Focus</strong></div>
+          <NavLink
+            to="/focus"
+            onClick={closeMobile}
+            title="Focus"
+            aria-label="Focus"
+            data-sidebar-tooltip="Focus"
+            className={!diagnoseMode ? 'module-option active focus-option' : 'module-option focus-option'}
+          >
+            <ListChecks size={18} aria-hidden="true" />
+            <div className="sidebar-label"><small>AURA GROW</small><strong>Focus</strong></div>
           </NavLink>
+
           {diagnoseEnabled && (
-            <NavLink to="/diagnose" onClick={close} title="Diagnose" aria-label="Diagnose" className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}>
-              <BrainCircuit size={17} />
-              <div><small>AURA GROW</small><strong>Diagnose</strong></div>
+            <NavLink
+              to="/diagnose"
+              onClick={closeMobile}
+              title="Diagnose"
+              aria-label="Diagnose"
+              data-sidebar-tooltip="Diagnose"
+              className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}
+            >
+              <BrainCircuit size={18} aria-hidden="true" />
+              <div className="sidebar-label"><small>AURA GROW</small><strong>Diagnose</strong></div>
             </NavLink>
           )}
         </div>
@@ -124,16 +189,16 @@ export default function Layout({ children }) {
           {diagnoseMode ? (
             <>
               <p className="nav-caption diagnose-caption">ANÁLISIS Y ESTRATEGIA</p>
-              {diagnoseLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+              {diagnoseLinks.map((item) => <NavItem key={item.to} {...item} close={closeMobile} />)}
             </>
           ) : (
             <>
               <p className="nav-caption">EJECUCIÓN COMERCIAL</p>
-              {executionLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+              {executionLinks.map((item) => <NavItem key={item.to} {...item} close={closeMobile} />)}
               {isAdmin && (
                 <>
                   <p className="nav-caption admin-caption">CONTROL Y MEDICIÓN</p>
-                  {adminLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+                  {adminLinks.map((item) => <NavItem key={item.to} {...item} close={closeMobile} />)}
                 </>
               )}
             </>
@@ -141,11 +206,27 @@ export default function Layout({ children }) {
         </nav>
 
         <div className="sidebar-footer">
-          <NavLink to="/settings" className="nav-link" onClick={close}><Settings size={18} /><span>Mi cuenta</span></NavLink>
+          <NavLink
+            to="/settings"
+            className="nav-link"
+            onClick={closeMobile}
+            title="Mi cuenta"
+            aria-label="Mi cuenta"
+            data-sidebar-tooltip="Mi cuenta"
+          >
+            <Settings size={18} aria-hidden="true" />
+            <span className="sidebar-label">Mi cuenta</span>
+          </NavLink>
+
           <div className="user-card">
             <span className="avatar">{firstName[0]}</span>
-            <div><strong>{profile?.full_name || 'Usuario'}</strong><small>{isAdmin ? 'Administradora' : 'Setter Focus'}</small></div>
-            <button className="icon-button" onClick={signOut} title="Cerrar sesión"><LogOut size={17} /></button>
+            <div className="sidebar-label">
+              <strong>{profile?.full_name || 'Usuario'}</strong>
+              <small>{isAdmin ? 'Administradora' : 'Setter Focus'}</small>
+            </div>
+            <button className="icon-button" onClick={signOut} title="Cerrar sesión" aria-label="Cerrar sesión">
+              <LogOut size={17} />
+            </button>
           </div>
         </div>
       </aside>
@@ -154,18 +235,18 @@ export default function Layout({ children }) {
 
       {diagnoseMode ? (
         <nav className="mobile-bottom-nav diagnose-mobile-nav" aria-label="Navegación móvil de Diagnose">
-          <NavLink end to="/diagnose" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><LayoutDashboard size={19} /><span>Inicio</span></NavLink>
-          <NavLink to="/diagnose/new" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ClipboardPlus size={19} /><span>Nuevo</span></NavLink>
-          <NavLink to="/diagnose/list" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><FileSearch size={19} /><span>Diagnósticos</span></NavLink>
-          <NavLink to="/diagnose/reports" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><FileText size={19} /><span>Informes</span></NavLink>
+          <NavLink end to="/diagnose" className={({ isActive }) => (isActive ? 'active' : '')}><LayoutDashboard size={19} /><span>Inicio</span></NavLink>
+          <NavLink to="/diagnose/new" className={({ isActive }) => (isActive ? 'active' : '')}><ClipboardPlus size={19} /><span>Nuevo</span></NavLink>
+          <NavLink to="/diagnose/list" className={({ isActive }) => (isActive ? 'active' : '')}><FileSearch size={19} /><span>Diagnósticos</span></NavLink>
+          <NavLink to="/diagnose/reports" className={({ isActive }) => (isActive ? 'active' : '')}><FileText size={19} /><span>Informes</span></NavLink>
         </nav>
       ) : (
         <nav className="mobile-bottom-nav" aria-label="Navegación móvil de Focus">
-          <NavLink to="/focus" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ListTodo size={19} /><span>Hoy</span></NavLink>
-          <NavLink to="/finder" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Search size={19} /><span>Generar</span></NavLink>
-          <NavLink to="/leads" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Database size={19} /><span>Leads</span></NavLink>
-          <NavLink to="/followups" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><BellRing size={19} /><span>Seguimientos</span></NavLink>
-          <NavLink to="/call-log" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><PhoneCall size={19} /><span>Call Log</span></NavLink>
+          <NavLink to="/focus" className={({ isActive }) => (isActive ? 'active' : '')}><ListTodo size={19} /><span>Hoy</span></NavLink>
+          <NavLink to="/finder" className={({ isActive }) => (isActive ? 'active' : '')}><Search size={19} /><span>Generar</span></NavLink>
+          <NavLink to="/leads" className={({ isActive }) => (isActive ? 'active' : '')}><Database size={19} /><span>Leads</span></NavLink>
+          <NavLink to="/followups" className={({ isActive }) => (isActive ? 'active' : '')}><BellRing size={19} /><span>Seguimientos</span></NavLink>
+          <NavLink to="/call-log" className={({ isActive }) => (isActive ? 'active' : '')}><PhoneCall size={19} /><span>Call Log</span></NavLink>
         </nav>
       )}
     </div>
