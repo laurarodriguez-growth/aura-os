@@ -4,6 +4,8 @@ import {
   ArrowRight,
   CalendarPlus,
   CheckCircle2,
+  ChevronDown,
+  ChevronUp,
   ExternalLink,
   FileText,
   MessageCircle,
@@ -68,6 +70,7 @@ export default function Focus() {
   const [statuses, setStatuses] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showLog, setShowLog] = useState(false);
+  const [showDetails, setShowDetails] = useState(false);
   const [log, setLog] = useState(emptyLog);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -96,6 +99,19 @@ export default function Focus() {
 
   useEffect(() => { load('mine'); }, []);
 
+  useEffect(() => {
+    document.body.classList.toggle('focus-sheet-open', showLog);
+    return () => document.body.classList.remove('focus-sheet-open');
+  }, [showLog]);
+
+  useEffect(() => { setShowDetails(false); }, [queue[0]?.id]);
+
+  useEffect(() => {
+    if (!success) return undefined;
+    const timer = window.setTimeout(() => setSuccess(''), 2600);
+    return () => window.clearTimeout(timer);
+  }, [success]);
+
   const current = queue[0] || null;
   const wa = current ? whatsappLink(current) : '';
   const progressText = summary.total
@@ -114,12 +130,14 @@ export default function Focus() {
     if (queue.length <= 1) return;
     setQueue((items) => [...items.slice(1), items[0]]);
     setShowLog(false);
+    setShowDetails(false);
     setSuccess('');
   };
 
   const removeCurrent = (message) => {
     setQueue((items) => items.slice(1));
     setShowLog(false);
+    setShowDetails(false);
     setLog(emptyLog);
     setSuccess(message);
   };
@@ -226,7 +244,12 @@ export default function Focus() {
               </div>
             </header>
 
-            <div className="focus-lead-kpis">
+            <button className="focus-details-toggle" onClick={() => setShowDetails((value) => !value)} aria-expanded={showDetails}>
+              {showDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              {showDetails ? 'Ocultar detalles' : 'Ver detalles del lead'}
+            </button>
+
+            <div className={`focus-lead-kpis ${showDetails ? 'mobile-open' : ''}`}>
               <div><span>ICP</span><strong>{current.final_score}</strong><small>Tier {current.final_tier}</small></div>
               <div><span>Estado</span><strong>{current.status}</strong><small>{current.outcome || 'Sin resultado previo'}</small></div>
               <div><span>Intentos</span><strong>{current.contact_attempts || 0}</strong><small>{current.owner_name || 'Sin asignar'}</small></div>
@@ -249,7 +272,7 @@ export default function Focus() {
             <div className="focus-primary-actions">
               {current.phone && <a className="focus-action call" href={`tel:${current.phone}`}><Phone size={21} /><span>Llamar ahora</span><small>{current.phone}</small></a>}
               {wa && <a className="focus-action whatsapp" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={21} /><span>Abrir WhatsApp</span><small>Contactar por mensaje</small></a>}
-              <button className="focus-action log" onClick={openLog}><FileText size={21} /><span>Registrar resultado</span><small>Guardar lo ocurrido</small></button>
+              <button className="focus-action log" onClick={openLog}><FileText size={21} /><span>Ya contacté · Registrar</span><small>Guardar lo ocurrido</small></button>
             </div>
 
             <div className="focus-secondary-actions">
@@ -266,7 +289,9 @@ export default function Focus() {
           </article>
 
           {showLog && (
-            <aside className="panel focus-log-panel">
+            <>
+              <button className="focus-log-backdrop" onClick={() => setShowLog(false)} aria-label="Cerrar registro rápido" />
+              <aside className="panel focus-log-panel">
               <header><div><p className="eyebrow">REGISTRO RÁPIDO</p><h3>¿Qué ocurrió?</h3></div><button className="icon-button" onClick={() => setShowLog(false)}>×</button></header>
               <div className="form-grid two">
                 <label>Canal<select value={log.channel} onChange={(e) => setLog({ ...log, channel: e.target.value })}><option>Llamada</option><option>WhatsApp</option><option>Instagram</option><option>Email</option><option>Otro</option></select></label>
@@ -279,8 +304,11 @@ export default function Focus() {
                 <label className="check-row"><input type="checkbox" checked={log.appointment_booked} onChange={(e) => setLog({ ...log, appointment_booked: e.target.checked })} />Reunión agendada</label>
                 <label>Monto de venta<input type="number" min="0" step="0.01" value={log.sale_amount} onChange={(e) => setLog({ ...log, sale_amount: e.target.value })} placeholder="0.00" /></label>
               </div>
-              <button className="button primary full" onClick={saveLog} disabled={saving || !log.outcome}><CheckCircle2 size={17} />{saving ? 'Guardando…' : 'Guardar y mostrar siguiente'}</button>
-            </aside>
+              <div className="focus-log-savebar">
+                <button className="button primary full" onClick={saveLog} disabled={saving || !log.outcome}><CheckCircle2 size={17} />{saving ? 'Guardando…' : 'Guardar y mostrar siguiente'}</button>
+              </div>
+              </aside>
+            </>
           )}
         </section>
       )}

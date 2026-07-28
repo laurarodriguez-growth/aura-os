@@ -85,3 +85,23 @@ class CallLogCreate(BaseModel):
     followup_date: date | None = None
     appointment_booked: bool = False
     sale_amount: float | None = Field(default=None, ge=0)
+
+
+UserRole = Literal["admin", "setter", "agent"]
+
+
+class AdminUserCreate(BaseModel):
+    full_name: str = Field(min_length=2, max_length=120)
+    email: str = Field(min_length=5, max_length=255)
+    password: str = Field(min_length=8, max_length=128)
+    role: UserRole = "setter"
+
+
+class AdminUserUpdate(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    role: UserRole | None = None
+    password: str | None = Field(default=None, min_length=8, max_length=128)
+
+
+class AdminUserDelete(BaseModel):
+    confirmation: str

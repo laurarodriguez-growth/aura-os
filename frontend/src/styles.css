@@ -14,6 +14,9 @@
   --accent: #bcff47;
   --accent-deep: #78b900;
   --accent-rgb: 188, 255, 71;
+  /* Reservado para Aura Grow Diagnose. Color elegido por Laura: #9000FF. */
+  --diagnose-accent: #9000ff;
+  --diagnose-accent-rgb: 144, 0, 255;
   --green: var(--accent);
   --green-deep: var(--accent-deep);
   --green-soft: rgba(var(--accent-rgb), .1);
@@ -1045,3 +1048,229 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
 
 .scoring-mode-grid.setter-mode { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 @media (max-width: 760px) { .scoring-mode-grid.setter-mode { grid-template-columns: 1fr; } }
+
+
+/* Aura Grow Focus 2.3: gestión de usuarios y pulido móvil */
+.focus-details-toggle {
+  display: none;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--border-soft);
+  background: transparent;
+  color: var(--muted);
+  padding: .72rem 0;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
+  font: inherit;
+  font-size: .7rem;
+  cursor: pointer;
+}
+.focus-log-backdrop { display: none; }
+
+.user-management-panel {
+  margin-top: 1rem;
+  padding: 1.25rem;
+}
+.user-management-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+.user-management-title {
+  display: flex;
+  gap: .8rem;
+  align-items: flex-start;
+}
+.user-management-title h2 { margin: .12rem 0 .28rem; font-size: 1.08rem; }
+.user-management-title p:last-child { margin: 0; color: var(--muted); font-size: .69rem; line-height: 1.55; }
+.user-management-actions { display: flex; gap: .55rem; flex-wrap: wrap; }
+.user-create-form {
+  display: grid;
+  grid-template-columns: 1.1fr 1.2fr 1fr .8fr auto;
+  gap: .65rem;
+  align-items: end;
+  padding: .9rem;
+  margin-bottom: .9rem;
+  border: 1px solid rgba(var(--accent-rgb), .2);
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), .045);
+}
+.user-create-form label { margin: 0; }
+.user-create-form .button { min-height: 42px; }
+.user-feedback { margin: .75rem 0; }
+.user-loading { padding: 2rem; text-align: center; color: var(--muted); }
+.user-list { display: grid; gap: .7rem; }
+.user-admin-card {
+  border: 1px solid var(--border);
+  border-radius: 13px;
+  padding: .85rem;
+  background: rgba(255,255,255,.014);
+}
+.user-admin-card.inactive { opacity: .7; background: rgba(255,255,255,.008); }
+.user-admin-summary {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: .7rem;
+  align-items: center;
+  margin-bottom: .7rem;
+}
+.user-admin-summary p { margin: .1rem 0; color: var(--muted); font-size: .68rem; }
+.user-admin-summary small { color: #6f7871; font-size: .61rem; }
+.user-name-line { display: flex; align-items: center; gap: .45rem; flex-wrap: wrap; }
+.user-name-line strong { font-size: .84rem; }
+.self-badge,
+.user-status {
+  display: inline-flex;
+  border-radius: 999px;
+  padding: .23rem .48rem;
+  font-size: .55rem;
+  font-weight: 700;
+}
+.self-badge { color: var(--green); background: var(--green-soft); }
+.user-status.active { color: var(--green); border: 1px solid rgba(var(--accent-rgb), .18); }
+.user-status.inactive { color: var(--warning); border: 1px solid rgba(247,201,107,.22); }
+.user-admin-fields {
+  display: grid;
+  grid-template-columns: 1fr .7fr 1.2fr;
+  gap: .6rem;
+}
+.user-admin-fields label { margin: 0; font-size: .61rem; }
+.user-admin-fields input,
+.user-admin-fields select { padding: .62rem; font-size: .69rem; }
+.user-activity-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .4rem;
+  margin: .65rem 0;
+}
+.user-activity-row span {
+  border: 1px solid var(--border-soft);
+  border-radius: 999px;
+  padding: .3rem .5rem;
+  color: var(--muted);
+  font-size: .57rem;
+}
+.user-admin-buttons { display: flex; gap: .5rem; flex-wrap: wrap; }
+.user-admin-buttons .button { padding: .58rem .72rem; font-size: .66rem; }
+.button.danger-ghost { background: transparent; color: var(--danger); border-color: rgba(255,123,119,.18); }
+.button.danger-ghost:hover { background: rgba(255,123,119,.06); }
+.user-safety-note {
+  display: flex;
+  gap: .6rem;
+  align-items: flex-start;
+  margin-top: .9rem;
+  padding: .75rem;
+  border: 1px solid rgba(247,201,107,.18);
+  border-radius: 10px;
+  color: var(--warning);
+  background: rgba(247,201,107,.04);
+}
+.user-safety-note svg { flex: 0 0 auto; }
+.user-safety-note p { margin: 0; font-size: .64rem; line-height: 1.55; }
+.user-safety-note strong { color: var(--text); }
+
+@media (max-width: 1180px) {
+  .user-create-form { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  .user-create-form .button { grid-column: 1 / -1; }
+}
+
+@media (max-width: 760px) {
+  body.focus-sheet-open { overflow: hidden; }
+  .main-content { padding-left: .72rem; padding-right: .72rem; }
+  .page-header { margin-bottom: 1.15rem; gap: .8rem; }
+  .page-description { font-size: .79rem; line-height: 1.55; }
+  .focus-summary-grid { margin-bottom: .6rem; }
+  .focus-summary-grid span { font-size: .66rem; }
+  .focus-card-top > div:first-child > p:last-child { font-size: .76rem; line-height: 1.45; }
+  .focus-details-toggle { display: flex; }
+  .focus-lead-kpis { display: none; }
+  .focus-lead-kpis.mobile-open { display: grid; }
+  .focus-recommendation small { font-size: .59rem; }
+  .focus-recommendation h3 { font-size: 1.02rem; }
+  .focus-recommendation p { font-size: .7rem; }
+  .focus-reasons span { font-size: .64rem; }
+  .focus-action span { font-size: .77rem; }
+  .focus-action small { font-size: .63rem; }
+  .focus-success {
+    position: fixed;
+    z-index: 110;
+    left: .75rem;
+    right: .75rem;
+    top: calc(66px + env(safe-area-inset-top));
+    box-shadow: var(--shadow);
+  }
+  .focus-log-backdrop {
+    display: block;
+    position: fixed;
+    z-index: 79;
+    inset: 0;
+    border: 0;
+    background: rgba(0,0,0,.68);
+    backdrop-filter: blur(3px);
+  }
+  .focus-log-panel {
+    position: fixed;
+    z-index: 80;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    max-height: calc(100dvh - 48px);
+    overflow-y: auto;
+    border-radius: 18px 18px 0 0;
+    padding: 1rem .85rem calc(.75rem + env(safe-area-inset-bottom));
+    box-shadow: 0 -24px 80px rgba(0,0,0,.48);
+    animation: focusSheetIn .2s ease-out;
+  }
+  .focus-log-panel::before {
+    content: '';
+    display: block;
+    width: 42px;
+    height: 4px;
+    border-radius: 999px;
+    background: #3a423c;
+    margin: -.35rem auto .75rem;
+  }
+  .focus-log-panel label { font-size: .68rem; }
+  .focus-log-panel input,
+  .focus-log-panel textarea,
+  .focus-log-panel select { font-size: 16px; }
+  .focus-log-savebar {
+    position: sticky;
+    bottom: calc(-.75rem - env(safe-area-inset-bottom));
+    margin: .8rem -.85rem calc(-.75rem - env(safe-area-inset-bottom));
+    padding: .7rem .85rem calc(.7rem + env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, rgba(13,16,14,.2), #0d100e 24%);
+  }
+  .lead-drawer { width: 100vw; border-left: 0; }
+  .drawer-header { position: sticky; top: 0; z-index: 3; background: rgba(13,16,14,.96); backdrop-filter: blur(14px); }
+  .drawer-tabs { position: sticky; top: 84px; z-index: 2; overflow-x: auto; background: #0d100e; }
+
+  .user-management-panel { padding: .85rem; }
+  .user-management-heading { flex-direction: column; }
+  .user-management-actions { width: 100%; }
+  .user-management-actions .button { flex: 1; }
+  .user-create-form { grid-template-columns: 1fr; padding: .75rem; }
+  .user-create-form .button { grid-column: auto; width: 100%; }
+  .user-admin-fields { grid-template-columns: 1fr; }
+  .user-admin-buttons { display: grid; grid-template-columns: 1fr; }
+  .user-admin-buttons .button { width: 100%; }
+  .settings-card { padding: .9rem; }
+  .security-panel { font-size: .75rem; line-height: 1.6; }
+}
+
+@media (max-width: 430px) {
+  .focus-card { padding: .72rem; }
+  .focus-card-top h2 { font-size: 1.3rem; }
+  .focus-summary-grid > div { min-height: 70px; }
+  .mobile-bottom-nav a { font-size: .55rem; }
+  .user-management-actions { display: grid; grid-template-columns: 1fr; }
+}
+
+@keyframes focusSheetIn {
+  from { transform: translateY(24px); opacity: .6; }
+  to { transform: translateY(0); opacity: 1; }
+}

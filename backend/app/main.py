@@ -15,7 +15,10 @@ from .config import get_settings
 from .db import get_supabase
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
-from .models import CallLogCreate, LeadUpdate, ScoringTemplateCreate, SearchJobCreate
+from .models import (
+    AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, LeadUpdate,
+    ScoringTemplateCreate, SearchJobCreate,
+)
 from .scoring import (
     SCORING_CATALOG,
     calculate_configured_score,
@@ -27,7 +30,7 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("aura-grow")
 
-app = FastAPI(title=settings.app_name, version="2.2.0")
+app = FastAPI(title=settings.app_name, version="2.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -397,6 +400,98 @@ def _log_activity(lead_id: str, user_id: str, event_type: str, description: str,
         logger.exception("No se pudo registrar actividad")
 
 
+
+
+def _model_value(value: Any, key: str, default: Any = None) -> Any:
+    if isinstance(value, dict):
+        return value.get(key, default)
+    return getattr(value, key, default)
+
+
+def _iso_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _auth_user_from_response(response: Any) -> Any:
+    user_obj = _model_value(response, "user")
+    if user_obj is not None:
+        return user_obj
+    data = _model_value(response, "data")
+    if data is not None:
+        nested = _model_value(data, "user")
+        return nested or data
+    return response
+
+
+def _list_auth_users() -> list[Any]:
+    response = get_supabase().auth.admin.list_users(page=1, per_page=1000)
+    if isinstance(response, list):
+        return response
+    users = _model_value(response, "users")
+    if users is not None:
+        return list(users)
+    data = _model_value(response, "data")
+    if isinstance(data, dict):
+        return list(data.get("users") or [])
+    return []
+
+
+def _is_auth_user_banned(auth_user: Any) -> bool:
+    banned_until = _parse_datetime(_model_value(auth_user, "banned_until"))
+    return bool(banned_until and banned_until > datetime.now(timezone.utc))
+
+
+def _user_activity_counts(user_id: str) -> dict[str, int]:
+    db = get_supabase()
+    calls = _count(db.table("call_logs").select("id", count="exact").eq("agent_id", user_id).limit(1))
+    assigned = _count(db.table("leads").select("id", count="exact").eq("owner_id", user_id).limit(1))
+    searches = _count(db.table("search_jobs").select("id", count="exact").eq("created_by", user_id).limit(1))
+    return {"call_logs": calls, "assigned_leads": assigned, "search_jobs": searches}
+
+
+def _active_admin_count() -> int:
+    rows = (
+        get_supabase().table("profiles")
+        .select("id", count="exact")
+        .eq("role", "admin")
+        .eq("is_active", True)
+        .execute()
+    )
+    return int(rows.count or 0)
+
+
+def _admin_user_rows() -> list[dict[str, Any]]:
+    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active,created_at,updated_at")
+    profile_map = {str(row["id"]): row for row in profile_rows}
+    items: list[dict[str, Any]] = []
+    for auth_user in _list_auth_users():
+        user_id = str(_model_value(auth_user, "id") or "")
+        if not user_id:
+            continue
+        profile = profile_map.get(user_id, {})
+        banned = _is_auth_user_banned(auth_user)
+        active = bool(profile.get("is_active", True)) and not banned
+        activity = _user_activity_counts(user_id)
+        items.append({
+            "id": user_id,
+            "email": _model_value(auth_user, "email") or "",
+            "full_name": profile.get("full_name") or _model_value(_model_value(auth_user, "user_metadata", {}), "full_name") or "Usuario",
+            "role": profile.get("role") or "agent",
+            "is_active": active,
+            "banned_until": _iso_value(_model_value(auth_user, "banned_until")),
+            "last_sign_in_at": _iso_value(_model_value(auth_user, "last_sign_in_at")),
+            "created_at": _iso_value(_model_value(auth_user, "created_at")) or profile.get("created_at"),
+            "call_logs": activity["call_logs"],
+            "assigned_leads": activity["assigned_leads"],
+            "search_jobs": activity["search_jobs"],
+            "can_delete": sum(activity.values()) == 0,
+        })
+    return sorted(items, key=lambda item: (not item["is_active"], item["full_name"].lower()))
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": settings.app_name}
@@ -409,8 +504,171 @@ def me(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any
 
 @app.get("/api/profiles")
 def profiles(user: Annotated[CurrentUser, Depends(get_current_user)]) -> list[dict[str, Any]]:
-    response = get_supabase().table("profiles").select("id,full_name,role").order("full_name").execute()
+    response = (
+        get_supabase().table("profiles")
+        .select("id,full_name,role,is_active")
+        .eq("is_active", True)
+        .order("full_name")
+        .execute()
+    )
     return response.data or []
+
+
+@app.get("/api/admin/users")
+def admin_list_users(user: Annotated[CurrentUser, Depends(require_admin)]) -> list[dict[str, Any]]:
+    return _admin_user_rows()
+
+
+@app.post("/api/admin/users", status_code=201)
+def admin_create_user(
+    payload: AdminUserCreate,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    email = payload.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Escribe un correo válido")
+
+    db = get_supabase()
+    created_id: str | None = None
+    try:
+        response = db.auth.admin.create_user({
+            "email": email,
+            "password": payload.password,
+            "email_confirm": True,
+            "user_metadata": {"full_name": payload.full_name.strip()},
+        })
+        created = _auth_user_from_response(response)
+        created_id = str(_model_value(created, "id") or "")
+        if not created_id:
+            raise RuntimeError("Supabase no devolvió el ID del usuario")
+        db.table("profiles").upsert({
+            "id": created_id,
+            "full_name": payload.full_name.strip(),
+            "role": payload.role,
+            "is_active": True,
+            "updated_at": utcnow_iso(),
+        }).execute()
+    except Exception as exc:
+        if created_id:
+            try:
+                db.auth.admin.delete_user(created_id)
+            except Exception:
+                logger.exception("No se pudo limpiar el usuario incompleto %s", created_id)
+        message = str(exc)
+        if "already" in message.lower() or "registered" in message.lower():
+            raise HTTPException(status_code=409, detail="Ya existe un usuario con ese correo") from exc
+        raise HTTPException(status_code=400, detail=f"No se pudo crear el usuario: {message}") from exc
+
+    return next((item for item in _admin_user_rows() if item["id"] == created_id), {"id": created_id})
+
+
+@app.patch("/api/admin/users/{target_user_id}")
+def admin_update_user(
+    target_user_id: str,
+    payload: AdminUserUpdate,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    db = get_supabase()
+    profile_response = db.table("profiles").select("id,role,is_active").eq("id", target_user_id).limit(1).execute()
+    target = _first(profile_response)
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+
+    values = payload.model_dump(exclude_none=True)
+    next_role = values.get("role")
+    if target_user_id == user.id and next_role and next_role != "admin":
+        raise HTTPException(status_code=400, detail="No puedes quitarte tu propio rol de administradora")
+    if target.get("role") == "admin" and next_role and next_role != "admin" and _active_admin_count() <= 1:
+        raise HTTPException(status_code=400, detail="Aura Grow debe conservar al menos una administradora activa")
+
+    profile_update: dict[str, Any] = {"updated_at": utcnow_iso()}
+    if "full_name" in values:
+        profile_update["full_name"] = values["full_name"].strip()
+    if "role" in values:
+        profile_update["role"] = values["role"]
+    if len(profile_update) > 1:
+        db.table("profiles").update(profile_update).eq("id", target_user_id).execute()
+
+    password = values.get("password")
+    if password:
+        try:
+            db.auth.admin.update_user_by_id(target_user_id, {"password": password})
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"No se pudo actualizar la contraseña: {exc}") from exc
+
+    return next((item for item in _admin_user_rows() if item["id"] == target_user_id), {"id": target_user_id})
+
+
+@app.post("/api/admin/users/{target_user_id}/deactivate")
+def admin_deactivate_user(
+    target_user_id: str,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    if target_user_id == user.id:
+        raise HTTPException(status_code=400, detail="No puedes desactivar tu propia cuenta")
+    db = get_supabase()
+    target = _first(db.table("profiles").select("id,role,is_active").eq("id", target_user_id).limit(1).execute())
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if target.get("role") == "admin" and target.get("is_active") is not False and _active_admin_count() <= 1:
+        raise HTTPException(status_code=400, detail="Aura Grow debe conservar al menos una administradora activa")
+    try:
+        db.auth.admin.update_user_by_id(target_user_id, {"ban_duration": "876000h"})
+        db.table("profiles").update({"is_active": False, "updated_at": utcnow_iso()}).eq("id", target_user_id).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo desactivar el acceso: {exc}") from exc
+    return {"ok": True, "is_active": False}
+
+
+@app.post("/api/admin/users/{target_user_id}/reactivate")
+def admin_reactivate_user(
+    target_user_id: str,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    db = get_supabase()
+    target = _first(db.table("profiles").select("id").eq("id", target_user_id).limit(1).execute())
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    try:
+        db.auth.admin.update_user_by_id(target_user_id, {"ban_duration": "none"})
+        db.table("profiles").update({"is_active": True, "updated_at": utcnow_iso()}).eq("id", target_user_id).execute()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo reactivar el acceso: {exc}") from exc
+    return {"ok": True, "is_active": True}
+
+
+@app.delete("/api/admin/users/{target_user_id}")
+def admin_delete_user(
+    target_user_id: str,
+    payload: AdminUserDelete,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    if payload.confirmation.strip().upper() != "ELIMINAR":
+        raise HTTPException(status_code=422, detail="Escribe ELIMINAR para confirmar")
+    if target_user_id == user.id:
+        raise HTTPException(status_code=400, detail="No puedes eliminar tu propia cuenta")
+
+    db = get_supabase()
+    target = _first(db.table("profiles").select("id,role,is_active").eq("id", target_user_id).limit(1).execute())
+    if not target:
+        raise HTTPException(status_code=404, detail="Usuario no encontrado")
+    if target.get("role") == "admin" and _active_admin_count() <= 1:
+        raise HTTPException(status_code=400, detail="Aura Grow debe conservar al menos una administradora activa")
+
+    activity = _user_activity_counts(target_user_id)
+    if sum(activity.values()) > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Este usuario ya tiene historial comercial. Desactívalo para conservar agentes, llamadas y métricas. "
+                f"Actividad: {activity['call_logs']} contactos, {activity['assigned_leads']} leads asignados y {activity['search_jobs']} búsquedas."
+            ),
+        )
+    try:
+        db.auth.admin.delete_user(target_user_id)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"No se pudo eliminar el usuario: {exc}") from exc
+    return {"ok": True}
 
 
 @app.get("/api/config")

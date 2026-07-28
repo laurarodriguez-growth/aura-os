@@ -49,8 +49,10 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None) -> C
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido")
 
     db = get_supabase()
-    profile_response = db.table("profiles").select("id,full_name,role").eq("id", user_id).limit(1).execute()
+    profile_response = db.table("profiles").select("id,full_name,role,is_active").eq("id", user_id).limit(1).execute()
     profile = (profile_response.data or [{}])[0]
+    if profile.get("is_active") is False:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tu acceso a Aura Grow está desactivado")
     return CurrentUser(
         id=user_id,
         email=auth_user.get("email", ""),
