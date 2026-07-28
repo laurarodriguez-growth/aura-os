@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlarmClock,
+  BrainCircuit,
   ArrowRight,
   CalendarPlus,
   CheckCircle2,
@@ -64,6 +65,7 @@ function whatsappLink(lead) {
 export default function Focus() {
   const { profile } = useAuth();
   const [queue, setQueue] = useState([]);
+  const [diagnoseTasks, setDiagnoseTasks] = useState([]);
   const [summary, setSummary] = useState({ total: 0, overdue: 0, due_today: 0, unassigned: 0 });
   const [scope, setScope] = useState('mine');
   const [profiles, setProfiles] = useState([]);
@@ -81,12 +83,14 @@ export default function Focus() {
     setLoading(true);
     setError('');
     try {
-      const [focusData, profileRows, config] = await Promise.all([
+      const [focusData, taskData, profileRows, config] = await Promise.all([
         api(`/api/focus?scope=${nextScope}&limit=100`),
+        api(`/api/focus/diagnose-tasks?scope=${nextScope}&limit=20`),
         profiles.length ? Promise.resolve(profiles) : api('/api/profiles'),
         statuses.length ? Promise.resolve({ statuses }) : api('/api/config'),
       ]);
       setQueue(focusData.items || []);
+      setDiagnoseTasks(taskData.items || []);
       setSummary(focusData);
       setProfiles(profileRows);
       setStatuses(config.statuses || statuses);
@@ -193,6 +197,24 @@ export default function Focus() {
     }
   };
 
+  const updateDiagnoseTask = async (task, patch, confirmation) => {
+    setSaving(true);
+    setError('');
+    try {
+      await api(`/api/focus/diagnose-tasks/${task.id}`, { method: 'PATCH', body: JSON.stringify(patch) });
+      setDiagnoseTasks((items) => items.filter((item) => item.id !== task.id));
+      setSuccess(confirmation);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const postponeDiagnoseTask = (task, days) => {
+    updateDiagnoseTask(task, { due_date: localISODate(days), status: 'pending' }, `Acción de Diagnose pospuesta ${days === 1 ? 'para mañana' : `${days} días`}.`);
+  };
+
   return (
     <>
       <PageHeader
@@ -220,6 +242,23 @@ export default function Focus() {
 
       {error && <div className="form-error page-error">{error}</div>}
       {success && <div className="focus-success"><CheckCircle2 size={18} />{success}</div>}
+
+      {!!diagnoseTasks.length && (
+        <section className="focus-diagnose-actions">
+          <header><div><p className="eyebrow">DESDE DIAGNOSE</p><h2>Acciones estratégicas</h2></div><strong>{diagnoseTasks.length}</strong></header>
+          {diagnoseTasks.slice(0, 3).map((task) => (
+            <article key={task.id} className={`focus-diagnose-task ${task.priority}`}>
+              <span className="focus-diagnose-icon"><BrainCircuit size={19} /></span>
+              <div className="focus-diagnose-copy"><small>{task.diagnosis?.company_name || 'Diagnóstico'} · {task.due_state === 'overdue' ? 'Vencida' : task.due_state === 'today' ? 'Para hoy' : task.due_date || 'Sin fecha'}</small><h3>{task.title}</h3>{task.description && <p>{task.description}</p>}</div>
+              <div className="focus-diagnose-controls">
+                {profile?.role === 'admin' && <a className="button small diagnose-outline" href={`#/diagnose/${task.diagnosis_id}/roadmap`}>Ver contexto</a>}
+                <button className="button small secondary" onClick={() => postponeDiagnoseTask(task, 1)} disabled={saving}>Mañana</button>
+                <button className="button small diagnose-primary" onClick={() => updateDiagnoseTask(task, { status: 'completed' }, 'Acción de Diagnose completada.')} disabled={saving}><CheckCircle2 size={15} />Completar</button>
+              </div>
+            </article>
+          ))}
+        </section>
+      )}
 
       {loading ? (
         <section className="panel focus-loading"><Sparkles size={22} />Focus está ordenando tus prioridades…</section>

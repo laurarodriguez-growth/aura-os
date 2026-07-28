@@ -13,6 +13,7 @@ from .auditor import audit_website
 from .auth import CurrentUser, get_current_user, require_admin
 from .config import get_settings
 from .db import get_supabase
+from .diagnose import router as diagnose_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
 from .models import (
@@ -30,7 +31,7 @@ settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("aura-grow")
 
-app = FastAPI(title=settings.app_name, version="2.3.0")
+app = FastAPI(title=settings.app_name, version="3.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -39,6 +40,8 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["Content-Disposition"],
 )
+
+app.include_router(diagnose_router)
 
 
 STATUSES = [

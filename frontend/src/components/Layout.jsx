@@ -1,8 +1,15 @@
 import {
   BarChart3,
   BellRing,
+  BrainCircuit,
+  ClipboardPlus,
   Database,
   Download,
+  FileSearch,
+  FileText,
+  FolderSearch,
+  LayoutDashboard,
+  ListChecks,
   ListTodo,
   LogOut,
   Menu,
@@ -12,7 +19,7 @@ import {
   Target,
   X,
 } from 'lucide-react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 
@@ -30,9 +37,16 @@ const adminLinks = [
   { to: '/exports', label: 'Exportaciones', icon: Download },
 ];
 
-function NavItem({ to, label, icon: Icon, close }) {
+const diagnoseLinks = [
+  { to: '/diagnose', label: 'Inicio', icon: LayoutDashboard, end: true },
+  { to: '/diagnose/new', label: 'Nuevo diagnóstico', icon: ClipboardPlus },
+  { to: '/diagnose/list', label: 'Diagnósticos', icon: FolderSearch },
+  { to: '/diagnose/reports', label: 'Informes', icon: FileText },
+];
+
+function NavItem({ to, label, icon: Icon, close, end = false }) {
   return (
-    <NavLink to={to} onClick={close} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
+    <NavLink end={end} to={to} onClick={close} className={({ isActive }) => isActive ? 'nav-link active' : 'nav-link'}>
       <Icon size={18} />
       <span>{label}</span>
     </NavLink>
@@ -41,17 +55,19 @@ function NavItem({ to, label, icon: Icon, close }) {
 
 export default function Layout({ children }) {
   const { profile, signOut } = useAuth();
+  const location = useLocation();
   const [open, setOpen] = useState(false);
   const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
   const isAdmin = profile?.role === 'admin';
+  const diagnoseMode = location.pathname.startsWith('/diagnose');
 
   const close = () => setOpen(false);
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'}`}>
       <header className="mobile-header">
         <button className="icon-button" onClick={() => setOpen(true)} aria-label="Abrir menú"><Menu /></button>
-        <div className="mobile-brand">AURA GROW</div>
+        <div className="mobile-brand">AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</div>
         <span className="avatar small">{firstName[0]}</span>
       </header>
 
@@ -68,19 +84,35 @@ export default function Layout({ children }) {
           <button className="icon-button mobile-only" onClick={close} aria-label="Cerrar menú"><X /></button>
         </div>
 
-        <div className="module-title">
-          <span className="module-dot" />
-          <div><small>AURA GROW</small><strong>Focus</strong></div>
+        <div className="module-switcher" aria-label="Cambiar experiencia de Aura Grow">
+          <NavLink to="/focus" onClick={close} className={!diagnoseMode ? 'module-option active focus-option' : 'module-option focus-option'}>
+            <ListChecks size={17} />
+            <div><small>AURA GROW</small><strong>Focus</strong></div>
+          </NavLink>
+          {isAdmin && (
+            <NavLink to="/diagnose" onClick={close} className={diagnoseMode ? 'module-option active diagnose-option' : 'module-option diagnose-option'}>
+              <BrainCircuit size={17} />
+              <div><small>AURA GROW</small><strong>Diagnose</strong></div>
+            </NavLink>
+          )}
         </div>
 
         <nav className="sidebar-nav">
-          <p className="nav-caption">EJECUCIÓN COMERCIAL</p>
-          {executionLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
-
-          {isAdmin && (
+          {diagnoseMode ? (
             <>
-              <p className="nav-caption admin-caption">CONTROL Y MEDICIÓN</p>
-              {adminLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+              <p className="nav-caption diagnose-caption">ANÁLISIS Y ESTRATEGIA</p>
+              {diagnoseLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+            </>
+          ) : (
+            <>
+              <p className="nav-caption">EJECUCIÓN COMERCIAL</p>
+              {executionLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+              {isAdmin && (
+                <>
+                  <p className="nav-caption admin-caption">CONTROL Y MEDICIÓN</p>
+                  {adminLinks.map((item) => <NavItem key={item.to} {...item} close={close} />)}
+                </>
+              )}
             </>
           )}
         </nav>
@@ -97,13 +129,22 @@ export default function Layout({ children }) {
 
       <main className="main-content">{children}</main>
 
-      <nav className="mobile-bottom-nav" aria-label="Navegación móvil de Focus">
-        <NavLink to="/focus" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ListTodo size={19} /><span>Hoy</span></NavLink>
-        <NavLink to="/finder" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Search size={19} /><span>Generar</span></NavLink>
-        <NavLink to="/leads" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Database size={19} /><span>Leads</span></NavLink>
-        <NavLink to="/followups" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><BellRing size={19} /><span>Seguimientos</span></NavLink>
-        <NavLink to="/call-log" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><PhoneCall size={19} /><span>Call Log</span></NavLink>
-      </nav>
+      {diagnoseMode ? (
+        <nav className="mobile-bottom-nav diagnose-mobile-nav" aria-label="Navegación móvil de Diagnose">
+          <NavLink end to="/diagnose" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><LayoutDashboard size={19} /><span>Inicio</span></NavLink>
+          <NavLink to="/diagnose/new" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ClipboardPlus size={19} /><span>Nuevo</span></NavLink>
+          <NavLink to="/diagnose/list" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><FileSearch size={19} /><span>Diagnósticos</span></NavLink>
+          <NavLink to="/diagnose/reports" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><FileText size={19} /><span>Informes</span></NavLink>
+        </nav>
+      ) : (
+        <nav className="mobile-bottom-nav" aria-label="Navegación móvil de Focus">
+          <NavLink to="/focus" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><ListTodo size={19} /><span>Hoy</span></NavLink>
+          <NavLink to="/finder" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Search size={19} /><span>Generar</span></NavLink>
+          <NavLink to="/leads" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><Database size={19} /><span>Leads</span></NavLink>
+          <NavLink to="/followups" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><BellRing size={19} /><span>Seguimientos</span></NavLink>
+          <NavLink to="/call-log" onClick={close} className={({ isActive }) => isActive ? 'active' : ''}><PhoneCall size={19} /><span>Call Log</span></NavLink>
+        </nav>
+      )}
     </div>
   );
 }

@@ -15,6 +15,12 @@ import CallLog from './pages/CallLog';
 import Exports from './pages/Exports';
 import Settings from './pages/Settings';
 import NotFound from './pages/NotFound';
+import DiagnoseHome from './pages/DiagnoseHome';
+import DiagnoseNew from './pages/DiagnoseNew';
+import Diagnoses from './pages/Diagnoses';
+import DiagnosisWorkspace from './pages/DiagnosisWorkspace';
+import DiagnosisReport from './pages/DiagnosisReport';
+import DiagnoseReports from './pages/DiagnoseReports';
 
 function ProtectedApp() {
   const { session, profile, loading, profileError } = useAuth();
@@ -39,6 +45,13 @@ function ProtectedApp() {
         <Route path="/dashboard" element={<Navigate to="/performance" replace />} />
         <Route path="/exports" element={isAdmin ? <Exports /> : <Navigate to="/focus" replace />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/diagnose" element={isAdmin ? <DiagnoseHome /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/new" element={isAdmin ? <DiagnoseNew /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/list" element={isAdmin ? <Diagnoses /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/reports" element={isAdmin ? <DiagnoseReports /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId/report/print" element={isAdmin ? <DiagnosisReport /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId/:section" element={isAdmin ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/:diagnosisId" element={isAdmin ? <DiagnosisWorkspace /> : <Navigate to="/focus" replace />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>
