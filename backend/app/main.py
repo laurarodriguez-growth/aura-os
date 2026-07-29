@@ -17,6 +17,11 @@ from .db import get_supabase
 from .diagnose import router as diagnose_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
+from .public_intake import router as public_intake_router
+from .outcomes import (
+    derive_outcome_stage, get_outcome_definition, router as outcomes_router,
+    suggested_followup_date,
+)
 from .models import (
     AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, ChatAnalysisRequest, LeadUpdate,
     ScoringTemplateCreate, SearchJobCreate,
@@ -43,6 +48,8 @@ app.add_middleware(
 )
 
 app.include_router(diagnose_router)
+app.include_router(public_intake_router)
+app.include_router(outcomes_router)
 
 
 STATUSES = [
@@ -221,8 +228,11 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
         "No respondió": 4,
         "Buzón de voz": 2,
     }.get(outcome, 0)
-    score += outcome_points
-    if outcome_points >= 14:
+    configured_outcome_adjustment = lead.get("outcome_priority_adjustment")
+    if configured_outcome_adjustment is None:
+        configured_outcome_adjustment = outcome_points
+    score += int(configured_outcome_adjustment or 0)
+    if int(configured_outcome_adjustment or 0) >= 14:
         reasons.append(f"Último resultado: {outcome}")
 
     if last_contact_local:
@@ -1424,12 +1434,41 @@ def update_lead(
     lead = _first(db.table("leads").select("*").eq("id", lead_id).limit(1).execute())
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
+
     changes = payload.model_dump(exclude_unset=True, mode="json")
     if "status" in changes and changes["status"] not in STATUSES:
         raise HTTPException(status_code=400, detail="Estado inválido")
     if not changes:
         return lead
+
+    outcome_definition = get_outcome_definition(changes.get("outcome_id"), changes.get("outcome") or lead.get("outcome"))
+    if outcome_definition:
+        changes["outcome_id"] = outcome_definition["id"]
+        changes["outcome"] = outcome_definition["name"]
+        if "conversation_status" not in changes and outcome_definition.get("recommended_conversation_status"):
+            changes["conversation_status"] = outcome_definition["recommended_conversation_status"]
+        if "status" not in changes and outcome_definition.get("recommended_commercial_status") in STATUSES:
+            changes["status"] = outcome_definition["recommended_commercial_status"]
+        changes["outcome_priority_adjustment"] = int(outcome_definition.get("priority_adjustment") or 0)
+        if "next_followup_date" not in changes:
+            recommended_date = suggested_followup_date(outcome_definition, panama_today())
+            if recommended_date:
+                changes["next_followup_date"] = recommended_date.isoformat()
+        if outcome_definition.get("code") == "do_not_contact":
+            changes["do_not_contact"] = True
+
     merged = {**lead, **changes}
+    changes["outcome_stage"] = derive_outcome_stage(
+        merged.get("conversation_status"),
+        outcome_definition,
+        merged.get("next_followup_date"),
+        merged.get("status"),
+    )
+    if changes["outcome_stage"] == "final":
+        changes["final_outcome_at"] = lead.get("final_outcome_at") or utcnow_iso()
+    elif lead.get("outcome_stage") == "final":
+        changes["final_outcome_at"] = None
+
     changes.update(normalize_manual_scores(merged))
     changes["updated_at"] = utcnow_iso()
     if changes.get("status") in {"Contactado", "Seguimiento 1", "Seguimiento 2", "Respondió", "Interesado"} and not lead.get("first_contact_date"):
@@ -1437,7 +1476,6 @@ def update_lead(
     response = db.table("leads").update(changes).eq("id", lead_id).execute()
     _log_activity(lead_id, user.id, "lead_updated", "Lead actualizado", {"changes": changes})
     return _first(response) or {**lead, **changes}
-
 
 def _default_response_due(channel: str, occurred_at: datetime) -> datetime:
     hours = {
@@ -1474,7 +1512,7 @@ def create_call_log(
     db = get_supabase()
     lead = _first(
         db.table("leads")
-        .select("id,status,first_contact_date,contact_attempts,conversation_status")
+        .select("id,status,first_contact_date,contact_attempts,conversation_status,outcome_stage")
         .eq("id", lead_id)
         .limit(1)
         .execute()
@@ -1483,18 +1521,47 @@ def create_call_log(
         raise HTTPException(status_code=404, detail="Lead no encontrado")
 
     occurred_at = payload.occurred_at or datetime.now(timezone.utc)
+    outcome_definition = get_outcome_definition(payload.outcome_id, payload.outcome)
+    outcome_name = outcome_definition.get("name") if outcome_definition else payload.outcome
+    outcome_id = outcome_definition.get("id") if outcome_definition else payload.outcome_id
+
+    conversation_status = payload.conversation_status
+    if outcome_definition and outcome_definition.get("is_terminal"):
+        conversation_status = "closed"
+    elif conversation_status == "not_started" and outcome_definition and outcome_definition.get("recommended_conversation_status"):
+        conversation_status = outcome_definition["recommended_conversation_status"]
+
+    followup_date = payload.followup_date
+    if not followup_date:
+        followup_date = suggested_followup_date(outcome_definition, panama_today())
+
+    commercial_status = outcome_definition.get("recommended_commercial_status") if outcome_definition else None
+    outcome_stage = derive_outcome_stage(conversation_status, outcome_definition, followup_date, commercial_status or lead.get("status"))
+    final_outcome = outcome_stage == "final"
+
     response_due_at = payload.response_due_at
-    if payload.awaiting_response and not response_due_at:
+    awaiting_response = conversation_status in {"waiting_response", "waiting_confirmation", "waiting_decision_maker"}
+    if awaiting_response and not response_due_at:
         response_due_at = _default_response_due(payload.channel, occurred_at)
 
     row = payload.model_dump(mode="json")
-    row["lead_id"] = lead_id
-    row["agent_id"] = user.id
-    row["occurred_at"] = occurred_at.isoformat()
-    row["response_due_at"] = response_due_at.isoformat() if response_due_at else None
-    row["is_final_outcome"] = bool(payload.is_final_outcome or payload.outcome_stage == "final")
-    if row["is_final_outcome"]:
-        row["outcome_stage"] = "final"
+    row.update({
+        "lead_id": lead_id,
+        "agent_id": user.id,
+        "occurred_at": occurred_at.isoformat(),
+        "response_due_at": response_due_at.isoformat() if response_due_at else None,
+        "outcome_id": outcome_id,
+        "outcome": outcome_name,
+        "conversation_status": conversation_status,
+        "outcome_stage": outcome_stage,
+        "outcome_priority_adjustment": int(outcome_definition.get("priority_adjustment") or 0) if outcome_definition else None,
+        "awaiting_response": awaiting_response,
+        "is_final_outcome": final_outcome,
+        "followup_date": followup_date.isoformat() if hasattr(followup_date, "isoformat") else followup_date,
+    })
+    if outcome_definition and not row.get("next_step") and outcome_definition.get("recommended_next_step"):
+        row["next_step"] = outcome_definition["recommended_next_step"]
+
     response = db.table("call_logs").insert(row).execute()
     call = _first(response) or row
 
@@ -1510,56 +1577,49 @@ def create_call_log(
         "last_contact_date": row["occurred_at"],
         "owner_id": user.id,
         "contact_attempts": attempt_count,
-        "conversation_status": payload.conversation_status,
+        "conversation_status": conversation_status,
         "conversation_status_changed_at": row["occurred_at"],
-        "outcome_stage": row["outcome_stage"],
+        "outcome_stage": outcome_stage,
     }
 
-    if payload.outcome and payload.outcome != "Pendiente":
-        lead_update["outcome"] = payload.outcome
+    if outcome_name and outcome_name != "Pendiente":
+        lead_update["outcome"] = outcome_name
+        lead_update["outcome_id"] = outcome_id
+        lead_update["outcome_priority_adjustment"] = int(outcome_definition.get("priority_adjustment") or 0) if outcome_definition else None
     if payload.direction == "Entrante" or payload.activity_type == "response_received":
         lead_update["last_inbound_at"] = row["occurred_at"]
         lead_update["waiting_since"] = None
         lead_update["response_due_at"] = None
     elif _counts_as_contact_attempt(payload):
         lead_update["last_outbound_at"] = row["occurred_at"]
-    if payload.awaiting_response:
+    if awaiting_response:
         lead_update["waiting_since"] = row["occurred_at"]
         lead_update["response_due_at"] = row["response_due_at"]
-    elif payload.conversation_status != "waiting_response":
+    elif conversation_status != "waiting_response":
         lead_update["waiting_since"] = None
-        if payload.conversation_status in ACTIVE_CONVERSATION_STATUSES or payload.conversation_status == "closed":
+        if conversation_status in ACTIVE_CONVERSATION_STATUSES or conversation_status == "closed":
             lead_update["response_due_at"] = None
 
     if not lead.get("first_contact_date") and _counts_as_contact_attempt(payload):
         lead_update["first_contact_date"] = panama_today().isoformat()
-    if payload.followup_date:
-        lead_update["next_followup_date"] = payload.followup_date.isoformat()
-
-    if row["is_final_outcome"]:
+    if followup_date:
+        lead_update["next_followup_date"] = followup_date.isoformat() if hasattr(followup_date, "isoformat") else followup_date
+    if final_outcome:
         lead_update["final_outcome_at"] = row["occurred_at"]
 
-    outcome_status = {
-        "Respondió": "Respondió",
-        "Solicitó información": "Respondió",
-        "Interesado": "Interesado",
-        "Reunión agendada": "Reunión agendada",
-        "No interesado": "No interesado",
-        "No califica": "No califica",
-        "Número incorrecto": "No califica",
-        "Venta": "Implementación vendida",
-    }.get(payload.outcome)
-    if outcome_status:
-        lead_update["status"] = outcome_status
-    elif payload.conversation_status in ACTIVE_CONVERSATION_STATUSES:
+    if commercial_status in STATUSES:
+        lead_update["status"] = commercial_status
+    elif conversation_status in ACTIVE_CONVERSATION_STATUSES:
         lead_update["status"] = "Respondió"
-    elif payload.conversation_status == "followup_scheduled":
+    elif conversation_status == "followup_scheduled":
         lead_update["status"] = "Seguimiento 1"
-    elif payload.conversation_status == "waiting_response" and lead.get("status") in {"Nuevo", "Investigando", "Listo para contactar"}:
+    elif conversation_status == "waiting_response" and lead.get("status") in {"Nuevo", "Investigando", "Listo para contactar"}:
         lead_update["status"] = "Contactado"
+    if outcome_definition and outcome_definition.get("code") == "do_not_contact":
+        lead_update["do_not_contact"] = True
 
     db.table("leads").update(lead_update).eq("id", lead_id).execute()
-    description_outcome = payload.outcome if payload.outcome != "Pendiente" else payload.conversation_status
+    description_outcome = outcome_name if outcome_name != "Pendiente" else conversation_status
     _log_activity(
         lead_id,
         user.id,
@@ -1568,8 +1628,9 @@ def create_call_log(
         {
             "call_log_id": call.get("id"),
             "activity_type": payload.activity_type,
-            "conversation_status": payload.conversation_status,
-            "outcome_stage": row["outcome_stage"],
+            "conversation_status": conversation_status,
+            "outcome_stage": outcome_stage,
+            "outcome_id": outcome_id,
         },
     )
     return call

@@ -11,15 +11,12 @@ import {
 import { Link } from 'react-router-dom';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
-import { conversationLabel, outcomeStageLabel } from '../components/ContactComposer';
+import { conversationLabel } from '../components/ContactComposer';
+import { useOutcomes } from '../components/OutcomeSelect';
 import { api, downloadExport } from '../lib/api';
 
 const channels = ['Llamada', 'WhatsApp', 'Instagram', 'Email', 'Otro'];
-const outcomes = [
-  'Pendiente', 'No respondió', 'Buzón de voz', 'Número incorrecto', 'Recepción', 'Respondió',
-  'Contacto con intermediario', 'Solicitó información', 'Objeción identificada', 'Esperando confirmación',
-  'Seguimiento solicitado', 'Interesado', 'Reunión agendada', 'No interesado', 'No califica', 'Venta',
-];
+
 const conversationStatuses = [
   ['not_started', 'No iniciada'],
   ['waiting_response', 'Esperando respuesta'],
@@ -38,7 +35,6 @@ const emptyFilters = {
   channel: '',
   outcome: '',
   conversation_status: '',
-  outcome_stage: '',
   agent_id: '',
   page_size: 25,
 };
@@ -52,6 +48,7 @@ export default function CallLog() {
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
+  const { items: outcomeLibrary } = useOutcomes('all');
 
   const buildParams = (values, pageNumber = 1, includePagination = true) => {
     const params = new URLSearchParams();
@@ -59,7 +56,7 @@ export default function CallLog() {
       params.set('page', String(pageNumber));
       params.set('page_size', String(values.page_size));
     }
-    ['search', 'date_from', 'date_to', 'channel', 'outcome', 'conversation_status', 'outcome_stage', 'agent_id'].forEach((key) => {
+    ['search', 'date_from', 'date_to', 'channel', 'outcome', 'conversation_status', 'agent_id'].forEach((key) => {
       if (String(values[key] || '').trim()) params.set(key, String(values[key]).trim());
     });
     return params;
@@ -144,7 +141,7 @@ export default function CallLog() {
     <>
       <PageHeader
         title="Call Log"
-        description="Cada acción se registra de inmediato. Los outcomes pueden permanecer pendientes o provisionales hasta que la conversación termine."
+        description="Cada acción se registra de inmediato. El equipo selecciona qué pasó y Aura calcula internamente el estado del outcome."
         actions={(
           <>
             <Link className="button secondary" to="/leads"><ArrowLeft size={16} />Volver a Base de leads</Link>
@@ -173,9 +170,8 @@ export default function CallLog() {
           <label>Desde<input type="date" value={filters.date_from} onChange={(e) => setFilters({ ...filters, date_from: e.target.value })} /></label>
           <label>Hasta<input type="date" value={filters.date_to} onChange={(e) => setFilters({ ...filters, date_to: e.target.value })} /></label>
           <label>Canal<select value={filters.channel} onChange={(e) => setFilters({ ...filters, channel: e.target.value })}><option value="">Todos</option>{channels.map((item) => <option key={item}>{item}</option>)}</select></label>
-          <label>Outcome<select value={filters.outcome} onChange={(e) => setFilters({ ...filters, outcome: e.target.value })}><option value="">Todos</option>{outcomes.map((item) => <option key={item}>{item}</option>)}</select></label>
+          <label>Outcome<select value={filters.outcome} onChange={(e) => setFilters({ ...filters, outcome: e.target.value })}><option value="">Todos</option>{outcomeLibrary.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}</select></label>
           <label>Conversación<select value={filters.conversation_status} onChange={(e) => setFilters({ ...filters, conversation_status: e.target.value })}><option value="">Todas</option>{conversationStatuses.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-          <label>Madurez<select value={filters.outcome_stage} onChange={(e) => setFilters({ ...filters, outcome_stage: e.target.value })}><option value="">Todas</option><option value="pending">Pendiente</option><option value="provisional">Provisional</option><option value="final">Final</option></select></label>
           <label>Agente<select value={filters.agent_id} onChange={(e) => setFilters({ ...filters, agent_id: e.target.value })}><option value="">Todos</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select></label>
           <label>Por página<select value={filters.page_size} onChange={(e) => changePageSize(e.target.value)}><option value={25}>25</option><option value={50}>50</option><option value={100}>100</option></select></label>
         </div>
@@ -198,7 +194,7 @@ export default function CallLog() {
                   <td><strong>{call.business_name}</strong><small>{call.contact_name || 'Sin persona'}{call.contact_title ? ` · ${call.contact_title}` : ''}</small></td>
                   <td>{call.channel}<small>{call.direction} · {call.activity_type || 'contact_attempt'}</small></td>
                   <td><span className={`conversation-pill ${call.conversation_status || 'not_started'}`}>{conversationLabel(call.conversation_status)}</span><small>{call.awaiting_response ? 'En espera' : ''}</small></td>
-                  <td><span className="status-tag">{call.outcome}</span><span className={`outcome-stage ${call.outcome_stage || 'provisional'}`}>{outcomeStageLabel(call.outcome_stage)}</span><small>{call.objection || call.notes || ''}</small></td>
+                  <td><span className="status-tag">{call.outcome}</span><small>{call.objection || call.notes || ''}</small></td>
                   <td>{call.agent_name}</td>
                   <td>{call.followup_date || '—'}<small>{call.next_step || call.notes || ''}</small></td>
                 </tr>

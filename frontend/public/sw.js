@@ -1,4 +1,4 @@
-const CACHE_NAME = 'aura-async-conversations-v1';
+const CACHE_NAME = 'aura-outcome-library-field-ux-v1';
 const APP_SHELL = ['./', './index.html', './favicon.svg', './aura-os-logo-currentcolor.svg'];
 
 self.addEventListener('install', (event) => {

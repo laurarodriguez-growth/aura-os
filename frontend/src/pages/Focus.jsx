@@ -171,7 +171,6 @@ export default function Focus() {
           owner_id: profile.id,
           status: current.status === 'Nuevo' ? 'Seguimiento 1' : current.status,
           conversation_status: 'followup_scheduled',
-          outcome_stage: 'provisional',
         }),
       });
       removeCurrent(`Seguimiento pospuesto ${days === 1 ? 'para mañana' : `${days} días`}.`);
@@ -284,7 +283,7 @@ export default function Focus() {
             <div className="conversation-state-banner">
               <MessageCircle size={18} />
               <div><small>ESTADO DE CONVERSACIÓN</small><strong>{conversationLabel(current.conversation_status)}</strong></div>
-              <span className={`outcome-stage ${current.outcome_stage || 'pending'}`}>{current.outcome_stage === 'final' ? 'Final' : current.outcome_stage === 'provisional' ? 'Provisional' : 'Pendiente'}</span>
+              <span className="conversation-current-outcome">{current.outcome || 'Pendiente'}</span>
             </div>
 
             <button className="focus-details-toggle" onClick={() => setShowDetails((value) => !value)} aria-expanded={showDetails}>

@@ -98,7 +98,7 @@ SIGNALS: tuple[Signal, ...] = (
             r"\bestamos (contentos|bien) con",
         ),
         objection="Ya utiliza otra solución",
-        outcome="Objeción identificada",
+        outcome="Ya tiene proveedor",
         conversation_status="conversation_active",
         next_step="Preguntar qué funciona, qué no funciona y cuándo revisan nuevamente la solución actual.",
         weight=3,
@@ -128,7 +128,7 @@ SIGNALS: tuple[Signal, ...] = (
             r"\bno conozco (esa|ese) (empresa|clinica|persona)",
         ),
         objection="Contacto incorrecto",
-        outcome="Número incorrecto",
+        outcome="Número incorrecto o inválido",
         conversation_status="closed",
         next_step="Corregir o enriquecer los datos del lead antes de realizar otro intento.",
         weight=5,
@@ -285,7 +285,7 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
         objection = ""
         next_step = "Responder, calificar la necesidad y acordar un próximo paso concreto."
 
-    final = conversation_status == "closed" or outcome in {"No interesado", "Número incorrecto", "No califica", "Venta"}
+    final = conversation_status == "closed" or outcome in {"No interesado", "Número incorrecto o inválido", "No califica", "Venta"}
     stage = "final" if final else "provisional"
     followup = _suggest_followup(normalized, today or date.today())
     total_weight = sum(int(item["weight"]) for item in matches)

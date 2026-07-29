@@ -68,6 +68,7 @@ class LeadUpdate(BaseModel):
     status: str | None = None
     owner_id: str | None = None
     outcome: str | None = None
+    outcome_id: str | None = None
     notes: str | None = None
     next_followup_date: date | None = None
     decision_maker_name: str | None = None
@@ -90,8 +91,9 @@ class CallLogCreate(BaseModel):
     duration_seconds: int | None = Field(default=None, ge=0, le=86400)
     activity_type: ActivityType = "contact_attempt"
     conversation_status: ConversationStatus = "not_started"
-    outcome_stage: OutcomeStage = "provisional"
+    outcome_stage: OutcomeStage | None = None
     outcome: str = "Pendiente"
+    outcome_id: str | None = None
     contact_name: str | None = None
     contact_title: str | None = None
     objection: str | None = None
@@ -104,7 +106,7 @@ class CallLogCreate(BaseModel):
     analysis: dict[str, Any] = Field(default_factory=dict)
     awaiting_response: bool = False
     response_due_at: datetime | None = None
-    is_final_outcome: bool = False
+    is_final_outcome: bool | None = None
 
 
 class ChatAnalysisRequest(BaseModel):

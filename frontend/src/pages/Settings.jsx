@@ -20,6 +20,7 @@ import { appConfig } from '../lib/config';
 import { getSupabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
+import OutcomeLibraryManager from '../components/OutcomeLibraryManager';
 
 const emptyNewUser = {
   full_name: '',
@@ -419,6 +420,9 @@ export default function Settings() {
           </div>
         </section>
       )}
+
+
+      {isAdmin && <OutcomeLibraryManager />}
 
       {isAdmin && (
         <section className="panel security-panel">
