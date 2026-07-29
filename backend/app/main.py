@@ -616,8 +616,27 @@ def _admin_user_rows() -> list[dict[str, Any]]:
     return sorted(items, key=lambda item: (not item["is_active"], item["full_name"].lower()))
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "service": settings.app_name}
+def health() -> dict[str, str | bool]:
+    return {
+        "status": "ok",
+        "service": settings.app_name,
+        "version": "3.2.0",
+        "outcome_library": True,
+        "chat_txt_import": True,
+        "sales_guidance": True,
+    }
+
+
+@app.get("/api/system/readiness")
+def system_readiness() -> dict[str, str | bool]:
+    return {
+        "status": "ready",
+        "version": "3.2.0",
+        "outcome_library": True,
+        "chat_analysis": True,
+        "chat_txt_import": True,
+        "sales_guidance": True,
+    }
 
 
 @app.get("/api/me")

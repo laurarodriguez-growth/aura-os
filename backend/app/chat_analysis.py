@@ -5,9 +5,6 @@ import unicodedata
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Any
-from zoneinfo import ZoneInfo
-
-PANAMA_TZ = ZoneInfo("America/Panama")
 
 
 def _normalize(text: str) -> str:
@@ -21,7 +18,6 @@ def _normalize(text: str) -> str:
 
 
 def _excerpt(original: str, normalized_pattern: re.Pattern[str]) -> str:
-    # La posición exacta puede cambiar al quitar tildes; devolvemos una línea relevante.
     for line in (original or "").splitlines():
         if normalized_pattern.search(_normalize(line)):
             return line.strip()[:220]
@@ -33,75 +29,153 @@ class Signal:
     key: str
     label: str
     patterns: tuple[str, ...]
+    outcome: str
+    conversation_status: str
+    commercial_status: str
+    next_step: str
+    recommended_reply: str
+    reasoning: str
     objection: str | None = None
-    outcome: str | None = None
-    conversation_status: str | None = None
-    next_step: str | None = None
     weight: int = 1
 
 
 SIGNALS: tuple[Signal, ...] = (
     Signal(
-        "budget",
-        "Restricción de presupuesto",
+        "do_not_contact",
+        "Solicitud expresa de no contacto",
         (
-            r"\b(no|sin) (tenemos|hay|cuento con) (presupuesto|budget|dinero)",
-            r"\b(se sale|esta fuera) de (mi|nuestro|el) presupuesto",
-            r"\b(muy|demasiado) (caro|costoso)",
-            r"\b(ahora|este mes) (estamos|ando) (apretad[oa]s?|cort[oa]s?)",
-            r"\b(no podemos|no puedo) (invertir|pagar|gastar)",
-            r"\bcuanto (cuesta|sale|vale)",
+            r"\b(no me escriban|no me escribas|no nos contacten|no volver a contactar|no llamar|no llames|no contactes|eliminar mi numero)\b",
+            r"\bpor favor no (llames|escribas|contactes)\b",
         ),
-        objection="Presupuesto",
-        outcome="Objeción identificada",
-        conversation_status="conversation_active",
-        next_step="Validar presupuesto disponible y presentar el impacto económico antes de hablar de implementación.",
-        weight=3,
+        outcome="No contactar",
+        conversation_status="closed",
+        commercial_status="Descartado",
+        next_step="No insistir y conservar el historial.",
+        recommended_reply="Entendido. Gracias por indicarlo; no volveremos a contactarles por este medio.",
+        reasoning="La persona pidió explícitamente detener el contacto. Aura recomienda cerrar el lead y respetar la solicitud.",
+        objection="No contactar",
+        weight=6,
     ),
     Signal(
-        "decision_maker",
-        "No se contactó al decisor",
+        "wrong_contact",
+        "Contacto o número incorrecto",
         (
-            r"\b(yo|nosotros) no (decido|decidimos|veo|vemos) eso",
-            r"\beso lo (ve|maneja|decide) (la|el|mi|nuestro)? ?(doctor|doctora|administracion|gerencia|dueno|encargad[oa])",
-            r"\b(la|el) (encargad[oa]|doctor|doctora|dueno|gerente) no esta",
-            r"\b(tengo|debo|voy a) (consultar|preguntar|validar|hablar) con",
-            r"\bno soy (la|el) (persona|encargad[oa]|responsable)",
+            r"\bnumero (equivocado|incorrecto|invalido)\b",
+            r"\bse (equivoco|confundio) de numero\b",
+            r"\baqui no (es|trabaja|queda)\b",
+            r"\bno conozco (esa|ese) (empresa|clinica|persona|negocio)\b",
         ),
-        objection="No se contactó al decisor",
-        outcome="Contacto con intermediario",
-        conversation_status="waiting_decision_maker",
-        next_step="Identificar al decisor, confirmar su nombre y acordar una fecha concreta para contactarlo.",
+        outcome="Número incorrecto o inválido",
+        conversation_status="closed",
+        commercial_status="No califica",
+        next_step="Buscar otro canal; si no existe, descartar.",
+        recommended_reply="Gracias por avisarnos. Disculpe la molestia; actualizaremos nuestros datos.",
+        reasoning="El canal no corresponde al negocio o a la persona buscada. No conviene seguir insistiendo en este contacto.",
+        objection="Contacto incorrecto",
+        weight=6,
+    ),
+    Signal(
+        "outside_hours_auto_reply",
+        "Respuesta automática fuera de horario",
+        (
+            r"\bfuera de (nuestro )?horario\b",
+            r"\bhorario de atencion\b",
+            r"\ben este momento estamos cerrados\b",
+            r"\bte responderemos (pronto|en horario)\b",
+        ),
+        outcome="Respuesta automática fuera de horario",
+        conversation_status="followup_scheduled",
+        commercial_status="Seguimiento 1",
+        next_step="Contactar dentro del horario con el mensaje corregido.",
+        recommended_reply="Hola 😊 Retomo mi mensaje dentro de su horario de atención. Mi nombre es Maikol y escribo de parte de Laura Rodriguez. ¿Podría indicarme quién gestiona las consultas y su seguimiento en la empresa?",
+        reasoning="La respuesta provino de una automatización y no representa interés ni rechazo. El lead debe seguir abierto y retomarse dentro del horario.",
         weight=4,
     ),
     Signal(
-        "timing",
-        "El momento no es inmediato",
+        "bot_requested_name_reason",
+        "Bot pidió nombre y motivo",
         (
-            r"\b(mas adelante|despues|otro dia|la proxima semana|el proximo mes)\b",
-            r"\b(ahora|hoy) no (puedo|podemos|es buen momento)",
-            r"\b(escribeme|llamame|contactame) (manana|luego|despues)",
-            r"\bcuando (tenga|tengamos) tiempo",
+            r"\b(indica|indiquenos|escribe|compartenos) (tu|su)? ?nombre\b",
+            r"\b(cual es|indica|indiquenos) el motivo\b",
+            r"\bpara poder ayudarte.*nombre\b",
+            r"\bselecciona una opcion\b",
         ),
-        objection="Momento / prioridad",
-        outcome="Seguimiento solicitado",
+        outcome="Bot pidió nombre y motivo",
         conversation_status="followup_scheduled",
-        next_step="Programar el seguimiento en la fecha indicada y confirmar el compromiso antes de cerrar el hilo.",
-        weight=2,
+        commercial_status="Seguimiento 1",
+        next_step="Responder al bot y solicitar a la persona encargada.",
+        recommended_reply="Hola 😊 Mi nombre es Maikol y escribo de parte de Laura Rodriguez. Estamos realizando una revisión breve de cómo las empresas gestionan y dan seguimiento a sus consultas. ¿Podría indicarme quién es la persona encargada de este proceso?",
+        reasoning="Todavía no respondió una persona. Aura recomienda completar el filtro del bot y pedir directamente al responsable del proceso.",
+        weight=4,
     ),
     Signal(
-        "existing_solution",
-        "Ya utiliza una solución o proveedor",
+        "patient_flow",
+        "WhatsApp abrió un flujo para pacientes",
         (
-            r"\bya (tenemos|uso|usamos|trabajamos con) (un|una|otro|otra)? ?(crm|agencia|proveedor|sistema|software|persona)",
-            r"\bnos lo (maneja|lleva) (una|la|un|el)",
-            r"\bestamos (contentos|bien) con",
+            r"\b(agendar|reservar) (una )?cita\b",
+            r"\bselecciona (el|un) servicio\b",
+            r"\bmotivo de (tu|su) consulta medica\b",
+            r"\bdatos del paciente\b",
         ),
-        objection="Ya utiliza otra solución",
-        outcome="Ya tiene proveedor",
-        conversation_status="conversation_active",
-        next_step="Preguntar qué funciona, qué no funciona y cuándo revisan nuevamente la solución actual.",
-        weight=3,
+        outcome="WhatsApp abrió flujo de paciente",
+        conversation_status="followup_scheduled",
+        commercial_status="Seguimiento 1",
+        next_step="Aclarar que es una consulta comercial y pedir al encargado.",
+        recommended_reply="Hola 😊 Disculpe, el sistema abrió el flujo de pacientes. Mi consulta es comercial: escribo de parte de Laura Rodriguez para conocer cómo gestionan y dan seguimiento a las consultas que reciben. ¿Con quién podría conversar sobre ese proceso?",
+        reasoning="El canal es correcto, pero la conversación entró por el flujo equivocado. Debe corregirse el contexto antes de continuar.",
+        weight=4,
+    ),
+    Signal(
+        "referral",
+        "Compartió o indicó otro contacto",
+        (
+            r"\b(escribele|contacta|habla) (a|con)\b",
+            r"\bte paso (el|su) (numero|contacto)\b",
+            r"\bcomunicate con\b",
+            r"\bla persona encargada es\b",
+        ),
+        outcome="Referido a otro contacto",
+        conversation_status="followup_scheduled",
+        commercial_status="Seguimiento 1",
+        next_step="Crear o actualizar el contacto referido y escribirle.",
+        recommended_reply="Muchas gracias. ¿Podría compartirme el nombre, el contacto y el mejor horario para escribirle a la persona encargada?",
+        reasoning="La conversación no terminó: el contacto actual redirigió la oportunidad. Aura recomienda crear el referido y continuar con él.",
+        weight=5,
+    ),
+    Signal(
+        "sale",
+        "Acuerdo de compra o implementación",
+        (
+            r"\b(aceptamos|aprobamos) la propuesta\b",
+            r"\bqueremos contratar\b",
+            r"\bvamos a empezar\b",
+            r"\bprocedamos con (la|el)\b",
+        ),
+        outcome="Venta",
+        conversation_status="closed",
+        commercial_status="Implementación vendida",
+        next_step="Iniciar onboarding y registrar el monto.",
+        recommended_reply="Excelente, gracias por la confianza. El siguiente paso es coordinar el inicio, responsables y documentación necesaria para la implementación.",
+        reasoning="La persona confirmó la compra o el inicio. Aura recomienda cerrar la etapa comercial y abrir el onboarding.",
+        weight=7,
+    ),
+    Signal(
+        "not_qualified",
+        "El caso no califica",
+        (
+            r"\bno somos (empresa|negocio|clinica)\b",
+            r"\bno recibimos consultas\b",
+            r"\bno tenemos equipo comercial\b",
+            r"\besto no aplica para nosotros\b",
+        ),
+        outcome="No califica",
+        conversation_status="closed",
+        commercial_status="No califica",
+        next_step="Cerrar la oportunidad con la razón documentada.",
+        recommended_reply="Gracias por aclararlo. Entiendo que la solución no aplica a su operación actual; cierro el contacto para no hacerles perder tiempo.",
+        reasoning="La necesidad o el perfil mínimo no existe. Mantener el lead abierto distorsionaría el pipeline.",
+        objection="No califica",
+        weight=6,
     ),
     Signal(
         "not_interested",
@@ -109,57 +183,34 @@ SIGNALS: tuple[Signal, ...] = (
         (
             r"\b(no me interesa|no nos interesa|no estamos interesados|no estoy interesad[oa])\b",
             r"\b(no gracias|gracias pero no|prefiero que no)\b",
-            r"\bno (quiero|queremos) (recibir|continuar|seguir)",
-            r"\bpor favor no (llames|escribas|contactes)",
+            r"\bno (quiero|queremos) (continuar|seguir)\b",
         ),
-        objection="No interesado",
         outcome="No interesado",
         conversation_status="closed",
-        next_step="Cerrar la oportunidad y respetar cualquier solicitud de no contacto.",
-        weight=5,
-    ),
-    Signal(
-        "wrong_contact",
-        "Contacto o número incorrecto",
-        (
-            r"\bnumero (equivocado|incorrecto)\b",
-            r"\bse (equivoco|confundio) de numero",
-            r"\baqui no (es|trabaja|queda)",
-            r"\bno conozco (esa|ese) (empresa|clinica|persona)",
-        ),
-        objection="Contacto incorrecto",
-        outcome="Número incorrecto o inválido",
-        conversation_status="closed",
-        next_step="Corregir o enriquecer los datos del lead antes de realizar otro intento.",
-        weight=5,
-    ),
-    Signal(
-        "request_info",
-        "Solicitó información",
-        (
-            r"\b(enviame|mandame|comparteme|pasa me|pasame) (la|mas|esa|algo de)? ?(informacion|info|propuesta|presentacion|precios|detalles)",
-            r"\bpuedes (enviar|mandar|compartir)\b",
-            r"\bquiero (ver|conocer|saber) mas\b",
-            r"\bde que se trata\b",
-        ),
-        outcome="Solicitó información",
-        conversation_status="conversation_active",
-        next_step="Enviar información relevante y acordar explícitamente cuándo se retomará la conversación.",
-        weight=3,
+        commercial_status="No interesado",
+        next_step="Cerrar la oportunidad y conservar el historial.",
+        recommended_reply="Entiendo, gracias por responder. No insistiremos. Quedo disponible si más adelante desean revisar el proceso.",
+        reasoning="La persona rechazó continuar. Aura recomienda cerrar el lead sin confundirlo con falta de respuesta.",
+        objection="No interesado",
+        weight=6,
     ),
     Signal(
         "meeting",
-        "Interés en reunión",
+        "Reunión coordinada o solicitada",
         (
             r"\b(agendemos|coordinemos|hagamos) (una|la)? ?(reunion|llamada|meet|demo)\b",
             r"\b(me|nos) (sirve|funciona|queda bien) (el|la|a las|a la)\b",
             r"\bpuedo (el|la) (lunes|martes|miercoles|jueves|viernes)\b",
             r"\bcuando (puedes|podemos) (hablar|reunirnos|verlo)\b",
+            r"\bconfirmado para\b",
         ),
         outcome="Reunión agendada",
         conversation_status="waiting_confirmation",
-        next_step="Confirmar fecha, hora, asistentes y enviar el enlace de la reunión.",
-        weight=5,
+        commercial_status="Reunión agendada",
+        next_step="Confirmar fecha, hora, asistentes y enviar el enlace.",
+        recommended_reply="Perfecto 😊 Confirmemos fecha, hora y quiénes participarán. En cuanto quede validado, les envío el enlace de la reunión.",
+        reasoning="Existe intención concreta de reunirse. Aura recomienda convertirla en un compromiso operativo con fecha, hora y asistentes.",
+        weight=7,
     ),
     Signal(
         "positive_interest",
@@ -172,12 +223,70 @@ SIGNALS: tuple[Signal, ...] = (
         ),
         outcome="Interesado",
         conversation_status="conversation_active",
-        next_step="Convertir el interés en un compromiso concreto: reunión, envío de información o fecha de decisión.",
+        commercial_status="Interesado",
+        next_step="Acordar reunión o siguiente paso concreto.",
+        recommended_reply="Excelente 😊 Para aterrizarlo a su caso, propongo una llamada breve de 15 minutos para revisar el proceso actual y definir el primer paso. ¿Qué horario les funciona mejor?",
+        reasoning="La persona mostró interés, pero todavía falta convertirlo en una acción concreta. Aura recomienda pedir un compromiso claro.",
+        weight=6,
+    ),
+    Signal(
+        "decision_maker",
+        "No se contactó al decisor",
+        (
+            r"\b(yo|nosotros) no (decido|decidimos|veo|vemos) eso\b",
+            r"\beso lo (ve|maneja|decide) (la|el|mi|nuestro)? ?(doctor|doctora|administracion|gerencia|dueno|encargad[oa])\b",
+            r"\b(la|el) (encargad[oa]|doctor|doctora|dueno|gerente) no esta\b",
+            r"\b(tengo|debo|voy a) (consultar|preguntar|validar|hablar) con\b",
+            r"\bno soy (la|el) (persona|encargad[oa]|responsable)\b",
+        ),
+        outcome="Contacto con intermediario",
+        conversation_status="waiting_decision_maker",
+        commercial_status="Seguimiento 1",
+        next_step="Identificar al decisor y acordar cuándo contactarlo.",
+        recommended_reply="Gracias. ¿Podría indicarme el nombre de la persona encargada y el mejor horario para contactarla? Así no les envío información genérica.",
+        reasoning="La persona respondió, pero no tiene autoridad sobre el proceso. Aura recomienda identificar al decisor antes de presentar la solución.",
+        objection="No se contactó al decisor",
+        weight=5,
+    ),
+    Signal(
+        "budget",
+        "Restricción o duda de presupuesto",
+        (
+            r"\b(no|sin) (tenemos|hay|cuento con) (presupuesto|budget|dinero)\b",
+            r"\b(se sale|esta fuera) de (mi|nuestro|el) presupuesto\b",
+            r"\b(muy|demasiado) (caro|costoso)\b",
+            r"\b(no podemos|no puedo) (invertir|pagar|gastar)\b",
+            r"\bcuanto (cuesta|sale|vale)\b",
+        ),
+        outcome="Objeción identificada",
+        conversation_status="conversation_active",
+        commercial_status="Respondió",
+        next_step="Validar presupuesto y explicar impacto antes de hablar de implementación.",
+        recommended_reply="Entiendo. Para no proponer algo fuera de contexto, ¿qué rango tendría sentido para ustedes si la solución reduce tareas manuales o recupera oportunidades que hoy se pierden?",
+        reasoning="Existe una objeción económica, no un rechazo definitivo. Aura recomienda entender el rango y conectar la inversión con el impacto.",
+        objection="Presupuesto",
+        weight=4,
+    ),
+    Signal(
+        "existing_solution",
+        "Ya utiliza una solución o proveedor",
+        (
+            r"\bya (tenemos|uso|usamos|trabajamos con) (un|una|otro|otra)? ?(crm|agencia|proveedor|sistema|software|persona)\b",
+            r"\bnos lo (maneja|lleva) (una|la|un|el)\b",
+            r"\bestamos (contentos|bien) con\b",
+        ),
+        outcome="Ya tiene proveedor",
+        conversation_status="followup_scheduled",
+        commercial_status="Seguimiento 2",
+        next_step="Preguntar qué funciona y qué todavía les cuesta; revisar en nurture.",
+        recommended_reply="Perfecto. No busco reemplazar algo que ya funciona. ¿Hay algún punto del proceso actual que todavía les cueste, por ejemplo seguimiento, velocidad de respuesta o visibilidad de resultados?",
+        reasoning="Tener proveedor no elimina necesariamente la necesidad. Aura recomienda explorar brechas sin confrontar la solución actual.",
+        objection="Ya utiliza otra solución",
         weight=4,
     ),
     Signal(
         "waiting_confirmation",
-        "Esperando confirmación",
+        "Quedó una confirmación pendiente",
         (
             r"\b(te|le) (confirmo|avisamos|aviso)\b",
             r"\bdejame (revisar|validar|confirmar)\b",
@@ -186,8 +295,46 @@ SIGNALS: tuple[Signal, ...] = (
         ),
         outcome="Esperando confirmación",
         conversation_status="waiting_confirmation",
-        next_step="Definir una fecha límite de respuesta y programar el seguimiento.",
-        weight=2,
+        commercial_status="Seguimiento 1",
+        next_step="Definir una fecha límite y programar seguimiento.",
+        recommended_reply="Perfecto, quedo pendiente. Para no dejarlo abierto, ¿les parece bien que retome la conversación en la fecha acordada si todavía no tengo confirmación?",
+        reasoning="La persona no rechazó; pidió tiempo para validar. Aura recomienda fijar cuándo se retomará para evitar un seguimiento indefinido.",
+        weight=3,
+    ),
+    Signal(
+        "timing",
+        "Pidió retomar después",
+        (
+            r"\b(mas adelante|despues|otro dia|la proxima semana|el proximo mes)\b",
+            r"\b(ahora|hoy) no (puedo|podemos|es buen momento)\b",
+            r"\b(escribeme|llamame|contactame) (manana|luego|despues)\b",
+            r"\bcuando (tenga|tengamos) tiempo\b",
+        ),
+        outcome="Seguimiento solicitado",
+        conversation_status="followup_scheduled",
+        commercial_status="Seguimiento 1",
+        next_step="Retomar en la fecha acordada.",
+        recommended_reply="Claro. ¿Qué día les funciona mejor para retomarlo? Así lo dejo agendado y no les escribo fuera de contexto.",
+        reasoning="La conversación sigue abierta, pero el momento no es inmediato. Aura recomienda convertir el 'después' en una fecha concreta.",
+        objection="Momento / prioridad",
+        weight=3,
+    ),
+    Signal(
+        "request_info",
+        "Solicitó información",
+        (
+            r"\b(enviame|mandame|comparteme|pasa me|pasame) (la|mas|esa|algo de)? ?(informacion|info|propuesta|presentacion|precios|detalles)\b",
+            r"\bpuedes (enviar|mandar|compartir)\b",
+            r"\bquiero (ver|conocer|saber) mas\b",
+            r"\bde que se trata\b",
+        ),
+        outcome="Solicitó información",
+        conversation_status="conversation_active",
+        commercial_status="Respondió",
+        next_step="Enviar información concreta y acordar seguimiento.",
+        recommended_reply="Claro 😊 Para enviarle algo relevante y no genérico, primero quisiera confirmar algo: ¿actualmente el seguimiento de las consultas se realiza manualmente o utilizan algún sistema?",
+        reasoning="La persona abrió la conversación, pero enviar una presentación genérica puede enfriarla. Aura recomienda hacer una pregunta de calificación antes de enviar material.",
+        weight=4,
     ),
 )
 
@@ -203,12 +350,26 @@ DAY_NAMES = {
 }
 
 
+STATUS_LABELS = {
+    "not_started": "No iniciada",
+    "waiting_response": "Esperando respuesta",
+    "response_received": "Respuesta recibida",
+    "conversation_active": "Conversación activa",
+    "waiting_decision_maker": "Esperando al decisor",
+    "waiting_confirmation": "Esperando confirmación",
+    "followup_scheduled": "Seguimiento programado",
+    "closed": "Cerrada",
+}
+
+
 def _suggest_followup(normalized: str, today: date) -> str | None:
-    if re.search(r"\bmanana\b", normalized):
-        return (today + timedelta(days=1)).isoformat()
     if re.search(r"\bpasado manana\b", normalized):
         return (today + timedelta(days=2)).isoformat()
-    if re.search(r"\bproxima semana\b", normalized):
+    if re.search(r"\bmanana\b", normalized):
+        return (today + timedelta(days=1)).isoformat()
+    if re.search(r"\b(en|dentro de) 3 dias\b", normalized):
+        return (today + timedelta(days=3)).isoformat()
+    if re.search(r"\b(en|dentro de) 7 dias\b|\bproxima semana\b", normalized):
         return (today + timedelta(days=7)).isoformat()
     for name, weekday in DAY_NAMES.items():
         if re.search(rf"\b{name}\b", normalized):
@@ -219,27 +380,55 @@ def _suggest_followup(normalized: str, today: date) -> str | None:
     return None
 
 
+def _default_result(channel: str | None, today: date) -> dict[str, Any]:
+    followup = (today + timedelta(days=1)).isoformat()
+    suggestion = {
+        "activity_type": "response_received",
+        "conversation_status": "response_received",
+        "outcome_stage": "provisional",
+        "outcome": "Respondió",
+        "objection": "",
+        "next_step": "Responder, calificar la necesidad y acordar un próximo paso concreto.",
+        "followup_date": followup,
+        "is_final_outcome": False,
+        "awaiting_response": False,
+        "channel": channel or "WhatsApp",
+        "commercial_status": "Respondió",
+    }
+    return {
+        "method": "local_semantic_rules_v2",
+        "confidence": 48,
+        "summary": "Hubo respuesta, pero Aura no detectó una objeción, compromiso o cierre suficientemente explícito.",
+        "recommended_reply": "Gracias por responder 😊 Para entender mejor el contexto, ¿cómo gestionan actualmente las consultas y el seguimiento de las personas que no compran o no agendan en el primer contacto?",
+        "reasoning": "La conversación está abierta, pero todavía falta información para decidir el siguiente paso. Aura recomienda hacer una pregunta de calificación.",
+        "signals": [],
+        "classification": {
+            "commercial_status": suggestion["commercial_status"],
+            "conversation_status": suggestion["conversation_status"],
+            "conversation_status_label": STATUS_LABELS[suggestion["conversation_status"]],
+            "outcome": suggestion["outcome"],
+            "next_step": suggestion["next_step"],
+            "followup_date": suggestion["followup_date"],
+        },
+        "suggestion": suggestion,
+        "warning": "Respuesta sugerida por Aura. Revísala antes de enviarla y confirma la clasificación antes de guardar.",
+    }
+
+
 def analyze_chat(transcript: str, *, channel: str | None = None, today: date | None = None) -> dict[str, Any]:
     original = transcript or ""
     normalized = _normalize(original)
+    current_date = today or date.today()
+
     if len(normalized) < 3:
-        return {
-            "method": "local_semantic_rules_v1",
+        empty = _default_result(channel, current_date)
+        empty.update({
             "confidence": 0,
             "summary": "No hay suficiente texto para analizar.",
-            "signals": [],
-            "suggestion": {
-                "activity_type": "response_received",
-                "conversation_status": "response_received",
-                "outcome_stage": "provisional",
-                "outcome": "Respondió",
-                "objection": "",
-                "next_step": "",
-                "followup_date": None,
-                "is_final_outcome": False,
-            },
-            "warning": "Aura no modificará el lead hasta que confirmes o edites la sugerencia.",
-        }
+            "recommended_reply": "",
+            "reasoning": "Pega una respuesta, un resumen o el TXT del chat para que Aura pueda proponer qué decir y cómo clasificarlo.",
+        })
+        return empty
 
     matches: list[dict[str, Any]] = []
     for signal in SIGNALS:
@@ -250,70 +439,79 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
                     "key": signal.key,
                     "label": signal.label,
                     "weight": signal.weight,
-                    "objection": signal.objection,
                     "outcome": signal.outcome,
                     "conversation_status": signal.conversation_status,
+                    "commercial_status": signal.commercial_status,
                     "next_step": signal.next_step,
+                    "recommended_reply": signal.recommended_reply,
+                    "reasoning": signal.reasoning,
+                    "objection": signal.objection,
                     "evidence": _excerpt(original, pattern),
                 })
                 break
 
-    # Evitar que "envíame información" se trate como reunión o interés fuerte por sí sola.
     keys = {item["key"] for item in matches}
-    priority = [
-        "wrong_contact",
-        "not_interested",
-        "meeting",
-        "positive_interest",
-        "decision_maker",
-        "budget",
-        "existing_solution",
-        "waiting_confirmation",
-        "timing",
-        "request_info",
-    ]
+    if "do_not_contact" in keys:
+        matches = [item for item in matches if item["key"] not in {"not_interested", "positive_interest"}]
+    elif "not_interested" in keys:
+        matches = [item for item in matches if item["key"] != "positive_interest"]
+    keys = {item["key"] for item in matches}
+    priority = [signal.key for signal in SIGNALS]
     primary = next((next(item for item in matches if item["key"] == key) for key in priority if key in keys), None)
 
-    if primary:
-        outcome = primary.get("outcome") or "Respondió"
-        conversation_status = primary.get("conversation_status") or "conversation_active"
-        objection = primary.get("objection") or ""
-        next_step = primary.get("next_step") or "Continuar la conversación y acordar un próximo paso concreto."
-    else:
-        outcome = "Respondió"
-        conversation_status = "conversation_active"
-        objection = ""
-        next_step = "Responder, calificar la necesidad y acordar un próximo paso concreto."
+    if not primary:
+        return _default_result(channel, current_date)
 
-    final = conversation_status == "closed" or outcome in {"No interesado", "Número incorrecto o inválido", "No califica", "Venta"}
+    conversation_status = primary["conversation_status"]
+    outcome = primary["outcome"]
+    commercial_status = primary["commercial_status"]
+    final = conversation_status == "closed" or outcome in {
+        "No contactar", "No interesado", "Número incorrecto o inválido", "No califica", "Venta",
+    }
     stage = "final" if final else "provisional"
-    followup = _suggest_followup(normalized, today or date.today())
-    total_weight = sum(int(item["weight"]) for item in matches)
-    confidence = min(96, 48 + total_weight * 7 + min(12, len(normalized) // 80)) if matches else 42
+    followup = None if final else _suggest_followup(normalized, current_date)
+    if not final and not followup:
+        followup = (current_date + timedelta(days=1)).isoformat()
 
-    labels = [item["label"] for item in matches[:3]]
-    summary = (
-        "Aura detectó " + ", ".join(label.lower() for label in labels) + "."
-        if labels
-        else "Aura detectó una respuesta, pero no encontró una objeción o compromiso suficientemente explícito."
-    )
+    total_weight = sum(int(item["weight"]) for item in matches)
+    confidence = min(97, 52 + total_weight * 6 + min(12, len(normalized) // 90))
+    secondary_labels = [item["label"].lower() for item in matches if item["key"] != primary["key"]][:1]
+    summary = f"Aura detectó {primary['label'].lower()}"
+    if secondary_labels:
+        summary += f" y {secondary_labels[0]}"
+    summary += "."
+
+    suggestion = {
+        "activity_type": "response_received",
+        "conversation_status": conversation_status,
+        "outcome_stage": stage,
+        "outcome": outcome,
+        "objection": primary.get("objection") or "",
+        "next_step": primary["next_step"],
+        "followup_date": followup,
+        "is_final_outcome": final,
+        "awaiting_response": conversation_status in {
+            "waiting_response", "waiting_decision_maker", "waiting_confirmation", "followup_scheduled",
+        },
+        "channel": channel or "WhatsApp",
+        "commercial_status": commercial_status,
+    }
 
     return {
-        "method": "local_semantic_rules_v1",
+        "method": "local_semantic_rules_v2",
         "confidence": confidence,
         "summary": summary,
+        "recommended_reply": primary["recommended_reply"],
+        "reasoning": primary["reasoning"],
         "signals": matches,
-        "suggestion": {
-            "activity_type": "response_received",
+        "classification": {
+            "commercial_status": commercial_status,
             "conversation_status": conversation_status,
-            "outcome_stage": stage,
+            "conversation_status_label": STATUS_LABELS.get(conversation_status, conversation_status),
             "outcome": outcome,
-            "objection": objection,
-            "next_step": next_step,
+            "next_step": primary["next_step"],
             "followup_date": followup,
-            "is_final_outcome": final,
-            "awaiting_response": conversation_status in {"waiting_decision_maker", "waiting_confirmation", "followup_scheduled"},
-            "channel": channel or "WhatsApp",
         },
-        "warning": "Este análisis usa reglas semánticas locales y contexto lingüístico. Confirma o edita la sugerencia antes de guardarla.",
+        "suggestion": suggestion,
+        "warning": "Respuesta sugerida por Aura. Revísala antes de enviarla y confirma la clasificación antes de guardar.",
     }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
+import { defaultOutcomesFor } from '../lib/outcomeDefaults';
 
 function groupByCategory(items) {
   return items.reduce((groups, item) => {
@@ -10,27 +11,39 @@ function groupByCategory(items) {
   }, {});
 }
 
-export function useOutcomes(context = 'classification', includeInactive = false) {
+export function useOutcomes(context = 'classification', includeInactive = false, allowLocalFallback = !includeInactive) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [usingLocalFallback, setUsingLocalFallback] = useState(false);
 
   const load = async () => {
     setLoading(true);
     setError('');
+    setUsingLocalFallback(false);
     try {
       const params = new URLSearchParams({ context });
       if (includeInactive) params.set('include_inactive', 'true');
-      setItems(await api(`/api/outcomes?${params}`));
+      const rows = await api(`/api/outcomes?${params}`);
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new Error('La biblioteca de outcomes todavía no tiene opciones disponibles.');
+      }
+      setItems(rows);
     } catch (loadError) {
-      setError(loadError.message || 'No se pudo cargar la biblioteca de outcomes.');
+      if (allowLocalFallback) {
+        setItems(defaultOutcomesFor(context));
+        setUsingLocalFallback(true);
+      } else {
+        setItems([]);
+        setError(loadError.message || 'No se pudo cargar la biblioteca de outcomes.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => { load(); }, [context, includeInactive]);
-  return { items, loading, error, reload: load };
+  useEffect(() => { load(); }, [context, includeInactive, allowLocalFallback]);
+  return { items, loading, error, reload: load, usingLocalFallback };
 }
 
 export default function OutcomeSelect({
@@ -50,13 +63,13 @@ export default function OutcomeSelect({
     <label className="outcome-select-field">{label}
       <select
         value={selected?.id || ''}
-        disabled={disabled}
+        disabled={disabled || outcomes.length === 0}
         onChange={(event) => {
           const item = outcomes.find((candidate) => candidate.id === event.target.value) || null;
           onChange(item);
         }}
       >
-        <option value="">Selecciona qué pasó</option>
+        <option value="">{outcomes.length ? 'Selecciona qué pasó' : 'Cargando outcomes…'}</option>
         {Object.entries(groups).map(([category, items]) => (
           <optgroup key={category} label={category}>
             {items.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}

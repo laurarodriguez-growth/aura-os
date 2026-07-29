@@ -93,7 +93,7 @@ function payloadFromDraft(draft) {
 }
 
 export default function OutcomeLibraryManager() {
-  const { items, loading, error: loadError, reload } = useOutcomes('all', true);
+  const { items, loading, error: loadError, reload } = useOutcomes('all', true, false);
   const [drafts, setDrafts] = useState({});
   const [showCreate, setShowCreate] = useState(false);
   const [newOutcome, setNewOutcome] = useState(emptyOutcome);
