@@ -52,7 +52,7 @@ export default function LeadFinder() {
     niche: 'Dental',
     city: 'Ciudad de Panamá',
     zones: 'San Francisco, Obarrio',
-    services: 'Implantes dentales, Ortodoncia',
+    services: 'Implantes dentales, Ortodoncia, Odontopediatría',
     max_results: 20,
     api_request_budget: 5,
   });
