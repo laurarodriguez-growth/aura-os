@@ -17,7 +17,7 @@ def _normalize(text: str) -> str:
     return value
 
 
-_AGENT_HINTS = ("maikol", "laura", "growth by laura", "aura os", "aura grow")
+_BASE_AGENT_HINTS = ("maikol", "laura", "growth by laura", "aura os", "aura grow")
 _EXPORT_PATTERNS = (
     re.compile(r"^\s*\[[^\]]+\]\s*([^:]{1,80}):\s*(.*)$"),
     re.compile(r"^\s*\d{1,2}[/. -]\d{1,2}[/. -]\d{2,4}[^-]{0,40}-\s*([^:]{1,80}):\s*(.*)$"),
@@ -41,19 +41,63 @@ def _parse_messages(text: str) -> list[tuple[str, str]]:
     return [(sender, message) for sender, message in messages if message]
 
 
-def _analysis_scope(text: str) -> str:
+def _setter_name(value: str | None) -> str:
+    return re.sub(r'\s+', ' ', (value or '').strip()) or 'Growth by Laura'
+
+
+def _setter_first_name(value: str | None) -> str:
+    full_name = _setter_name(value)
+    return full_name if full_name == 'Growth by Laura' else full_name.split(' ', 1)[0]
+
+
+def _personalize_setter_text(value: str, setter_name: str | None) -> str:
+    full_name = _setter_name(setter_name)
+    first_name = _setter_first_name(full_name)
+    return re.sub(r'\bMaikol\b', first_name, re.sub(r'\bMaikol Brown\b', full_name, value or ''))
+
+
+def _agent_hints(setter_name: str | None) -> tuple[str, ...]:
+    full_name = _normalize(_setter_name(setter_name))
+    first_name = full_name.split(' ', 1)[0] if full_name else ''
+    dynamic = tuple(item for item in (full_name, first_name if len(first_name) >= 4 else '') if item)
+    return tuple(dict.fromkeys((*_BASE_AGENT_HINTS, *dynamic)))
+
+
+def _is_agent_sender(sender: str, setter_name: str | None = None) -> bool:
+    normalized_sender = _normalize(sender)
+    return any(hint in normalized_sender for hint in _agent_hints(setter_name))
+
+
+def _analysis_context(text: str, setter_name: str | None = None) -> tuple[str, str]:
     messages = _parse_messages(text)
     if not messages:
-        return text or ""
-    for sender, message in reversed(messages):
-        normalized_sender = _normalize(sender)
-        if not any(hint in normalized_sender for hint in _AGENT_HINTS):
-            return message
-    return messages[-1][1]
+        return text or "", ""
+    lead_index = len(messages) - 1
+    while lead_index >= 0 and _is_agent_sender(messages[lead_index][0], setter_name):
+        lead_index -= 1
+    if lead_index < 0:
+        lead_index = len(messages) - 1
+    previous_agent_message = ""
+    for index in range(lead_index - 1, -1, -1):
+        if _is_agent_sender(messages[index][0], setter_name):
+            previous_agent_message = messages[index][1]
+            break
+    return messages[lead_index][1], previous_agent_message
 
 
-def _excerpt(original: str, normalized_pattern: re.Pattern[str]) -> str:
-    scope = _analysis_scope(original)
+def _analysis_scope(text: str, setter_name: str | None = None) -> str:
+    return _analysis_context(text, setter_name)[0]
+
+
+def _next_business_day(current_date: date, delay_days: int = 1) -> date:
+    candidate = current_date + timedelta(days=max(0, delay_days))
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _excerpt(original: str, normalized_pattern: re.Pattern[str], setter_name: str | None = None) -> str:
+    scope = _analysis_scope(original, setter_name)
     for line in (scope or "").splitlines():
         if normalized_pattern.search(_normalize(line)):
             return line.strip()[:220]
@@ -77,9 +121,360 @@ class Signal:
     followup_delay_days: int | None = 1
     is_terminal: bool = False
     appointment_booked: bool = False
+    followup_mode: str = ""
 
 
 SIGNALS: tuple[Signal, ...] = (
+
+    Signal(
+        key='maikol_outside_hours',
+        label='respuesta automática fuera de horario',
+        patterns=(
+            r'\b(fuera de|fuera del) (nuestro )?horario\b',
+            r'\bhorario de atencion\b',
+            r'\ben este momento estamos (cerrados|fuera de servicio)\b',
+            r'\bte responderemos (pronto|en horario|cuando regresemos)\b',
+            r'\bnuestro horario es de\b',
+        ),
+        outcome='Respuesta automática fuera de horario',
+        conversation_status='followup_scheduled',
+        commercial_status='Contactado',
+        next_step='Retomar el próximo día hábil entre 9:15 a. m. y 10:30 a. m.',
+        recommended_reply='Hola 😊 Retomo mi mensaje dentro de su horario de atención. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Vimos una posible oportunidad relacionada con el seguimiento de sus consultas por WhatsApp. ¿Con quién podría conversar sobre marketing, ventas o gestión de pacientes?',
+        reasoning='Respondió una automatización, no una persona. El lead sigue abierto y debe retomarse dentro del horario de atención.',
+        priority=140,
+        confidence=98,
+        followup_delay_days=1,
+        followup_mode='next_business_day',
+    ),
+    Signal(
+        key='maikol_bot_name_reason',
+        label='bot solicitó nombre y motivo',
+        patterns=(
+            r'\b(indica|indiquenos|escribe|compartenos|ingresa) (tu|su)? ?nombre\b',
+            r'\b(cual es|indica|indiquenos|escribe) (el )?motivo\b',
+            r'\b(nombre completo|motivo de contacto|motivo de la consulta)\b',
+            r'\bpara poder ayudarte.*\bnombre\b',
+        ),
+        outcome='Bot pidió nombre y motivo',
+        conversation_status='waiting_decision_maker',
+        commercial_status='Contactado',
+        next_step='Responder al bot y solicitar a la persona encargada.',
+        recommended_reply='Hola 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Motivo: queremos compartirles una observación breve sobre su proceso de atención por WhatsApp que podría ayudarles a convertir más consultas en citas. ¿Con quién podría conversarlo?',
+        reasoning='El bot está filtrando el contacto. Maikol debe identificarse con transparencia y pedir una sola derivación.',
+        priority=139,
+        confidence=98,
+    ),
+    Signal(
+        key='maikol_patient_flow',
+        label='flujo automático de paciente',
+        patterns=(
+            r'^\s*quiero agendar una cita\s*[.!]*$',
+            r'^\s*quiero mas informacion\s*[.!]*$',
+            r'\b(agendar|reservar|confirmar) (una )?(cita|consulta)\b',
+            r'\bselecciona (el|un) (servicio|tratamiento|especialidad)\b',
+            r'\bdatos del paciente\b',
+        ),
+        outcome='WhatsApp abrió flujo de paciente',
+        conversation_status='waiting_response',
+        commercial_status='Contactado',
+        next_step='Borrar el texto de paciente, aclarar el motivo comercial y confirmar si el seguimiento es manual o utiliza un sistema.',
+        recommended_reply='Hola 😊 Gracias por responder. No escribo como paciente. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+        reasoning='WhatsApp abrió un flujo de paciente. Maikol debe borrar el texto predeterminado, aclarar que no escribe como paciente y hacer la pregunta sobre el sistema de seguimiento.',
+        priority=138,
+        confidence=97,
+    ),
+    Signal(
+        key='maikol_auto_welcome',
+        label='respuesta automática de bienvenida',
+        patterns=(
+            r'\bgracias por (comunicarte|comunicarse|contactarnos|escribirnos)\b',
+            r'\bhemos recibido (tu|su) (mensaje|consulta|solicitud)\b',
+            r'\buno de (nuestros|nuestro) (asesores|agentes|representantes) (te|le) respondera\b',
+            r'\bbienvenid[oa]s? a\b',
+            r'\btu mensaje ha sido recibido\b',
+        ),
+        outcome='Respondió',
+        conversation_status='waiting_response',
+        commercial_status='Contactado',
+        next_step='Confirmar si el seguimiento de consultas es manual o utiliza un sistema.',
+        recommended_reply='Hola 😊 Gracias por responder. No escribo como paciente. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+        reasoning='La bienvenida automática no es una respuesta comercial humana. El script actualizado pide aclarar que no se escribe como paciente y abrir con una sola pregunta sobre el seguimiento.',
+        priority=137,
+        confidence=96,
+    ),
+    Signal(
+        key='maikol_send_info_here',
+        label='solicitud de enviar información por el mismo chat',
+        patterns=(
+            r'\b(puede|puedes|pueden|pueden ustedes) (enviar|mandar|compartir)(nos|me)? (la|esa|mas)? ?(informacion|info|detalles) (por aqui|aqui|por este medio)\b',
+            r'\benvie(n)? (la|esa|mas)? ?(informacion|info|detalles) (por aqui|aqui|por este medio)\b',
+            r'\bmandalo por aqui\b',
+            r'\b(puede|puedes|pueden) enviar(la|lo)? por aqui\b',
+        ),
+        outcome='Solicitó información',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Confirmar si el seguimiento es manual o si utilizan un sistema.',
+        recommended_reply='Claro 😊 Laura realiza un diagnóstico del proceso de atención y seguimiento comercial. Revisa cómo reciben las consultas, cómo las califican, qué seguimiento realizan y en qué puntos podrían estar perdiéndose oportunidades. Luego entrega recomendaciones concretas para mejorar el proceso. No es un servicio de manejo de redes ni publicidad. ¿Actualmente el seguimiento de las personas que consultan por WhatsApp se realiza manualmente o utilizan algún sistema?',
+        reasoning='El lead abrió la conversación, pero todavía falta una sola pregunta de diagnóstico antes de enviar información.',
+        priority=136,
+        confidence=97,
+    ),
+    Signal(
+        key='maikol_no_system',
+        label='seguimiento manual o sin sistema',
+        patterns=(
+            r'\b(no tenemos|no usamos|no utilizamos|no contamos con) (ningun )?(sistema|crm|software|plataforma|automatizacion)\b',
+            r'\b(se hace|lo hacemos|es|todo es) manual\b',
+            r'\bdepende de (una persona|alguien|recepcion|la recepcionista)\b',
+            r'\b(lo llevamos|usamos) (en )?(excel|google sheets|una libreta|papel|whatsapp)\b',
+        ),
+        outcome='Respondió',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Registrar que el proceso es manual y observar la siguiente respuesta antes de avanzar.',
+        recommended_reply='Entiendo 😊 Probablemente el seguimiento depende de que alguien recuerde responder, retomar conversaciones y confirmar citas. Justamente ayudamos a los negocios a organizar ese proceso para que menos consultas se pierdan y más personas terminen agendando.',
+        reasoning='Se confirmó una operación manual. El script actualizado explica brevemente la brecha sin agregar otra pregunta en ese mismo mensaje.',
+        objection='Proceso manual',
+        priority=135,
+        confidence=97,
+    ),
+    Signal(
+        key='maikol_uses_system',
+        label='ya utiliza un sistema',
+        patterns=(
+            r'\b(si|sí),? (tenemos|usamos|utilizamos|contamos con) (un|una|el|la)? ?(sistema|crm|software|plataforma|automatizacion|bot|chatbot)\b',
+            r'\b(tenemos|usamos|utilizamos|trabajamos con) (kommo|hubspot|zoho|salesforce|monday|trello|whatsapp business)\b',
+            r'\bya (tenemos|usamos|utilizamos) (un|una|el|la)? ?(sistema|crm|software|plataforma)\b',
+            r'\bya esta (automatizado|sistematizado)\b',
+        ),
+        outcome='Objeción identificada',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Identificar qué sistema utilizan y quién supervisa el proceso.',
+        recommended_reply='Perfecto 😊 Eso ya es un buen avance. Muchas veces el problema no es tener o no una herramienta, sino cómo se utiliza para dar seguimiento, recuperar conversaciones y convertir consultas en citas. ¿Qué sistema utilizan actualmente y quién supervisa este proceso?',
+        reasoning='Tener sistema no cierra la oportunidad. El script pide identificar la herramienta y al responsable.',
+        objection='Ya utiliza sistema o CRM',
+        priority=134,
+        confidence=96,
+    ),
+    Signal(
+        key='maikol_decision_maker_present',
+        label='apareció la persona encargada',
+        patterns=(
+            r'\b(yo soy|soy) (la|el)? ?(encargad[oa]|responsable|administrador[a]?|gerente)\b',
+            r'\b(yo|conmigo) (lo manejo|lo veo|me encargo|puede hablar|puedes hablar)\b',
+            r'\bhabla conmigo\b',
+            r'\bese tema lo (veo|manejo) yo\b',
+        ),
+        outcome='Respondió',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Confirmar si miden cuántas consultas se convierten en citas o clientes.',
+        recommended_reply='Hola, mucho gusto 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estuvimos revisando brevemente su proceso de atención y detectamos una posible oportunidad relacionada con el seguimiento de las consultas que reciben por WhatsApp. ¿Actualmente tienen una forma clara de saber cuántas consultas terminan convirtiéndose en citas o clientes?',
+        reasoning='Ya apareció el responsable. El script pasa de derivación a una sola pregunta de medición.',
+        priority=133,
+        confidence=96,
+    ),
+    Signal(
+        key='maikol_not_measuring',
+        label='no mide conversión de consultas',
+        patterns=(
+            r'\b(no medimos|no lo medimos|no llevamos metricas|no tenemos metricas)\b',
+            r'\bno (sabemos|se) cuantas? (consultas|personas|conversaciones) (terminan|se convierten|agendan)\b',
+            r'\bno llevamos (ese|un) control\b',
+            r'\bno tenemos forma de saber\b',
+            r'\bno calculamos (la )?conversion\b',
+        ),
+        outcome='Interesado',
+        conversation_status='conversation_active',
+        commercial_status='Interesado',
+        next_step='Ofrecer dos horarios cerrados para una llamada de 15 minutos.',
+        recommended_reply='Entiendo. Eso suele hacer que muchas oportunidades se pierdan sin que el negocio pueda identificar exactamente dónde ocurrió. Laura está realizando revisiones breves de procesos comerciales para detectar posibles fugas en atención, seguimiento y conversión. Podríamos mostrarle en una llamada de 15 minutos qué observamos y qué mejora puntual podría aplicar. Laura tiene disponibilidad [OPCIÓN 1] o [OPCIÓN 2]. ¿Cuál de esos dos horarios le funciona mejor?',
+        reasoning='La falta de medición confirma una brecha concreta. El siguiente paso es ofrecer dos horarios, no pedir disponibilidad abierta.',
+        objection='No mide conversión',
+        priority=132,
+        confidence=97,
+        followup_delay_days=0,
+    ),
+    Signal(
+        key='maikol_metric_provided',
+        label='compartió el indicador que utiliza',
+        patterns=(
+            r'\b(medimos|calculamos|revisamos|seguimos) (por|con|la|el) (porcentaje|tasa|numero|cantidad|dashboard|reporte)\b',
+            r'\b(tasa|porcentaje) de conversion\b',
+            r'\b(consultas|leads|mensajes).*(citas|ventas|clientes).*(porcentaje|tasa|reporte|dashboard)\b',
+            r'\b(kpi|indicador) (es|principal|que usamos)\b',
+        ),
+        outcome='Interesado',
+        conversation_status='conversation_active',
+        commercial_status='Interesado',
+        next_step='Relacionar el indicador con el hallazgo y ofrecer dos horarios.',
+        recommended_reply='Gracias. Lo que observamos parece estar más relacionado con [TIEMPO DE RESPUESTA / SEGUIMIENTO / RECUPERACIÓN DE CONVERSACIONES / CLARIDAD DEL PRÓXIMO PASO]. Laura podría mostrarle el hallazgo en una llamada breve de 15 minutos. Tiene disponibilidad [OPCIÓN 1] o [OPCIÓN 2]. ¿Cuál le funciona mejor?',
+        reasoning='El lead ya explicó cómo mide. Aura deja marcado el espacio que Maikol debe adaptar al hallazgo real antes de copiar.',
+        priority=131,
+        confidence=92,
+        followup_delay_days=0,
+    ),
+    Signal(
+        key='maikol_yes_measuring',
+        label='sí mide la conversión',
+        patterns=(
+            r'\b(si|sí),? (medimos|lo medimos|llevamos metricas|tenemos metricas|llevamos control)\b',
+            r'\btenemos (un )?(reporte|dashboard|control) de conversion\b',
+            r'\bsabemos cuantas? (consultas|personas) (agendan|se convierten)\b',
+        ),
+        outcome='Respondió',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Preguntar qué indicador utilizan para medir la conversión.',
+        recommended_reply='Perfecto 😊 Eso ya los coloca por delante de muchos negocios. Para entender mejor, ¿qué indicador utilizan actualmente para medir la conversión de consultas en citas o ventas?',
+        reasoning='La empresa sí mide. El script pide identificar el indicador antes de proponer la llamada.',
+        priority=130,
+        confidence=94,
+    ),
+    Signal(
+        key='maikol_information_request',
+        label='pidió más información',
+        patterns=(
+            r'\b(enviame|mandame|comparteme|pasame|envie|mande) (la|mas|esa|algo de)? ?(informacion|info|propuesta|presentacion|detalles)\b',
+            r'\bquiero (ver|conocer|saber) mas\b',
+            r'\bde que se trata\b',
+            r'\bcomo funciona\b',
+        ),
+        outcome='Solicitó información',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Identificar si el reto principal es responder, dar seguimiento o lograr citas.',
+        recommended_reply='Claro 😊 Para enviarte algo realmente útil y no una presentación genérica, quisiera confirmar algo primero: ¿el principal reto que tienen actualmente está en responder las consultas, dar seguimiento o lograr que las personas agenden?',
+        reasoning='El script evita enviar presentaciones genéricas y utiliza una sola pregunta para ubicar el problema principal.',
+        priority=129,
+        confidence=96,
+    ),
+    Signal(
+        key='maikol_price_request',
+        label='preguntó el precio',
+        patterns=(
+            r'\bcuanto (cuesta|sale|vale|cobran)\b',
+            r'\b(cual es|cuales son) (el|los|su|sus) (precio|precios|tarifa|tarifas|planes)\b',
+            r'\bque precio tiene\b',
+            r'\b(enviame|mandame|envienos) (los|el)? ?(precios|tarifas|planes|cotizacion)\b',
+        ),
+        outcome='Solicitó información',
+        conversation_status='conversation_active',
+        commercial_status='Interesado',
+        next_step='Aclarar que la primera conversación es gratuita y ofrecer dos horarios.',
+        recommended_reply='La primera conversación de 15 minutos no tiene costo. Es únicamente para mostrarles la observación y determinar si vale la pena realizar una evaluación más completa. Si después identificamos que podemos ayudarles, Laura les explicará las opciones disponibles. ¿Les funciona mejor [OPCIÓN 1] o [OPCIÓN 2]?',
+        reasoning='Según el script, Maikol no cotiza por chat: explica el propósito de la llamada inicial y ofrece dos horarios.',
+        objection='Precio',
+        priority=128,
+        confidence=97,
+        followup_delay_days=0,
+    ),
+    Signal(
+        key='maikol_existing_owner',
+        label='ya cuenta con una persona encargada',
+        patterns=(
+            r'\bya (tenemos|contamos con|hay) (una persona|alguien|un encargado|una encargada|un equipo|personal)\b',
+            r'\b(eso|el seguimiento|las consultas|whatsapp) (lo|las) (maneja|lleva|ve|atiende) (recepcion|la recepcionista|administracion|una persona|nuestro equipo|alguien)\b',
+            r'\btenemos (quien|a alguien que) (responda|atienda|maneje|lleve)\b',
+            r'\bya hay (encargado|encargada|responsable)\b',
+            r'\btenemos (una recepcionista|un recepcionista|un asistente|una asistente) que (se encarga|lo maneja|lo lleva|responde)\b',
+        ),
+        outcome='Objeción identificada',
+        conversation_status='conversation_active',
+        commercial_status='Respondió',
+        next_step='Confirmar si esa persona también supervisa seguimiento y conversión.',
+        recommended_reply='Perfecto 😊 Justamente no buscamos reemplazar a la persona encargada. La revisión sirve para darle una segunda mirada al proceso y detectar posibles oportunidades de mejora. ¿Esa persona supervisa también el seguimiento y la conversión de las consultas?',
+        reasoning='La frase aclara que ya existe un responsable, pero no necesariamente rechaza la conversación.',
+        objection='Ya cuenta con encargado',
+        priority=127,
+        confidence=97,
+    ),
+    Signal(
+        key='maikol_not_interested',
+        label='rechazo comercial explícito',
+        patterns=(
+            r'\b(no me interesa|no nos interesa|no le interesa|no les interesa|no interesa)\b',
+            r'\bno (estoy|estamos|esta|estan) interesad[oa]s?\b',
+            r'\b(no gracias|gracias pero no|prefiero que no|por ahora no)\b',
+            r'\bno (quiero|queremos|deseo|deseamos) (continuar|seguir|avanzar|recibir informacion)\b',
+        ),
+        outcome='No interesado',
+        conversation_status='closed',
+        commercial_status='No interesado',
+        next_step='Retirar del seguimiento y conservar el historial.',
+        recommended_reply='Entendido 😊 Muchas gracias por responder. Los retiramos del seguimiento. Que tengan un excelente día.',
+        reasoning='Existe un rechazo claro. El script indica cerrar con respeto y no seguir calificando.',
+        objection='No interesado',
+        priority=150,
+        confidence=98,
+        followup_delay_days=None,
+        is_terminal=True,
+    ),
+    Signal(
+        key='maikol_referral',
+        label='referencia a otro contacto',
+        patterns=(
+            r'\b(escrib(e|ele|anle)|contact(a|e|en)|llam(a|e|en)) a (esta|esa|la|el) persona\b',
+            r'\b(eso|este tema|marketing|ventas|las consultas) lo maneja (otra persona|[a-zñ ]{2,50})\b',
+            r'\b(te|le|les) (paso|comparto|envio|doy) (el )?(numero|contacto|correo)\b',
+            r'\bpregunta(le)? si (esta|estan) interesad[oa]s?\b',
+            r'\bhabla con [a-zñ ]{2,50}\b',
+            r'\bescribele a [a-zñ ]{2,50}\b',
+        ),
+        outcome='Referido a otro contacto',
+        conversation_status='followup_scheduled',
+        commercial_status='Seguimiento 1',
+        next_step='Crear el referido como lead separado, registrar quién lo compartió y escribirle hoy.',
+        recommended_reply='Perfecto, muchas gracias por orientarme 😊 Le escribiré ahora mismo indicando que usted me compartió el contacto.',
+        reasoning='El lead original es referidor, no “No califica”. Debe conservarse y crear el nuevo contacto por separado.',
+        priority=125,
+        confidence=97,
+        followup_delay_days=0,
+    ),
+    Signal(
+        key='maikol_meeting_details',
+        label='envió datos para crear la reunión',
+        patterns=(
+            r'\b(correo|email)\s*(?:es|:|=|-)\s*[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b',
+            r'^\s*[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\s*$',
+            r'\b(nombre|cargo)\b.{0,160}\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b',
+        ),
+        outcome='Reunión agendada',
+        conversation_status='closed',
+        commercial_status='Reunión agendada',
+        next_step='Crear la reunión en Google Meet y enviar la invitación al correo confirmado.',
+        recommended_reply='Gracias 😊 En unos minutos le comparto la invitación de Google Meet.',
+        reasoning='El contacto ya entregó el correo y los datos necesarios. El siguiente paso es crear la invitación, no volver a calificar.',
+        priority=124,
+        confidence=95,
+        followup_delay_days=None,
+        is_terminal=True,
+        appointment_booked=True,
+    ),
+    Signal(
+        key='maikol_time_selected',
+        label='eligió uno de los horarios',
+        patterns=(
+            r'\b(la|el) (primera|segunda|primer|segundo) (opcion|horario)\b',
+            r'\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo).*(a las|am|pm|a\. m\.|p\. m\.)\b',
+            r'\b(ese|este) horario (me|nos) (funciona|sirve|queda bien)\b',
+            r'\b(me|nos) funciona (el|la|a las|a la)\b',
+            r'\b(prefiero|elegimos|tomamos) (el|la)\b.*\b(horario|opcion|am|pm|a\. m\.|p\. m\.)\b',
+            r'\b(confirmado|confirmada) para\b',
+        ),
+        outcome='Esperando confirmación',
+        conversation_status='waiting_confirmation',
+        commercial_status='Interesado',
+        next_step='Confirmar día y hora y solicitar nombre, cargo y correo.',
+        recommended_reply='Perfecto 😊 Queda confirmado para [DÍA, FECHA Y HORA]. La llamada será por Google Meet y tendrá una duración aproximada de 15 minutos. Para que Laura pueda aprovechar mejor la conversación, ¿me confirma nombre de la persona que participará, cargo y correo electrónico?',
+        reasoning='El horario fue elegido, pero todavía faltan los datos para crear la invitación.',
+        priority=123,
+        confidence=95,
+        followup_delay_days=0,
+    ),
     Signal(
         key='do_not_contact',
         label='Solicitud expresa de no contacto',
@@ -96,7 +491,7 @@ SIGNALS: tuple[Signal, ...] = (
         recommended_reply='Entendido. Gracias por indicarlo; no volveremos a contactarles por este medio.',
         reasoning='La persona pidió explícitamente detener el contacto. Aura recomienda cerrar el lead y respetar la solicitud.',
         objection='No contactar',
-        priority=100,
+        priority=170,
         confidence=98,
         followup_delay_days=None,
         is_terminal=True,
@@ -196,10 +591,15 @@ SIGNALS: tuple[Signal, ...] = (
         key='not_interested',
         label='Negativa comercial explícita',
         patterns=(
-            '\\b(no me interesa|no nos interesa|no estoy interesad[oa]|no estamos interesad[oa]s)\\b',
-            '\\b(no gracias|gracias pero no|prefiero que no|paso por ahora)\\b',
-            '\\bno (quiero|queremos|deseo|deseamos) (continuar|seguir|avanzar|recibir informacion)\\b',
-            '\\bno estamos buscando (eso|ese servicio|una solucion)\\b',
+            r'\b(no me interesa|no nos interesa|no le interesa|no les interesa|no interesa)\b',
+            r'\bno (estoy|estamos|esta|estan|se encuentra|se encuentran) interesad[oa]s?\b',
+            r'\b(?:el cliente|la cliente|el negocio|la empresa|ellos|ellas|nosotros|nosotras)?\s*(?:indica|dice|respondio|comenta|menciona|informo|informa)?\s*(?:que )?no (?:esta|estan|estamos|tiene|tienen|hay) (?:interes|interesad[oa]s?)\b',
+            r'\bpor (?:el )?momento no (?:esta|estan|estamos|hay|tenemos|tienen) (?:interes|interesad[oa]s?)\b',
+            r'\b(sin interes|no hay interes|no tenemos interes|no tienen interes|no es de (nuestro|su) interes)\b',
+            r'\b(no gracias|gracias pero no|prefiero que no|paso por ahora|por ahora no)\b',
+            r'\bno (quiero|queremos|deseo|deseamos|quiere|quieren) (continuar|seguir|avanzar|recibir informacion)\b',
+            r'\bno estamos buscando (eso|ese servicio|una solucion)\b',
+            r'\b(rechaza|rechazaron|declina|declinaron) (la )?(propuesta|oferta|conversacion|servicio)\b',
         ),
         outcome='No interesado',
         conversation_status='closed',
@@ -927,9 +1327,9 @@ SIGNALS: tuple[Signal, ...] = (
         outcome='Respondió',
         conversation_status='response_received',
         commercial_status='Respondió',
-        next_step='Presentarse brevemente y hacer una pregunta de calificación.',
-        recommended_reply='Hola 😊 Soy Maikol y escribo de parte de Laura Rodriguez. Estamos revisando cómo las empresas gestionan y dan seguimiento a sus consultas. ¿Ese proceso lo manejan manualmente o utilizan algún sistema?',
-        reasoning='La persona abrió la conversación con un saludo. Aura recomienda presentarse con claridad y avanzar con una sola pregunta.',
+        next_step='Presentarse brevemente y confirmar si el seguimiento es manual o utiliza un sistema.',
+        recommended_reply='Hola 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+        reasoning='La persona abrió la conversación con un saludo. Aura usa el primer contacto actualizado y hace una sola pregunta sobre el sistema de seguimiento.',
         objection='',
         priority=10,
         confidence=58,
@@ -1004,7 +1404,7 @@ def _suggest_followup(normalized: str, today: date) -> str | None:
     return None
 
 
-def _default_result(channel: str | None, today: date, scope: str = "") -> dict[str, Any]:
+def _default_result(channel: str | None, today: date, scope: str = "", setter_name: str | None = None) -> dict[str, Any]:
     followup = (today + timedelta(days=1)).isoformat()
     suggestion = {
         "activity_type": "response_received",
@@ -1012,7 +1412,7 @@ def _default_result(channel: str | None, today: date, scope: str = "") -> dict[s
         "outcome_stage": "provisional",
         "outcome": "Respondió",
         "objection": "",
-        "next_step": "Responder, calificar la necesidad y acordar un próximo paso concreto.",
+        "next_step": "Identificar al responsable o formular una sola pregunta de calificación.",
         "followup_date": followup,
         "is_final_outcome": False,
         "awaiting_response": False,
@@ -1021,11 +1421,11 @@ def _default_result(channel: str | None, today: date, scope: str = "") -> dict[s
         "commercial_status": "Respondió",
     }
     return {
-        "method": "aura_response_library_v3",
-        "library_version": "2026.07.29",
+        "method": "aura_setter_playbook_v3",
+        "library_version": "2026.07.29.5",
         "confidence": 48,
         "summary": "Hubo respuesta, pero Aura no detectó una intención comercial suficientemente explícita.",
-        "recommended_reply": "Gracias por responder 😊 Para entender mejor el contexto, ¿cómo gestionan actualmente las consultas y el seguimiento de las personas que no compran o no agendan en el primer contacto?",
+        "recommended_reply": _personalize_setter_text("Gracias por responder 😊 Para orientarme correctamente, ¿usted supervisa el seguimiento de las consultas por WhatsApp o debería conversar con otra persona?", setter_name),
         "reasoning": "La conversación está abierta, pero todavía falta información para decidir el siguiente paso. Aura recomienda hacer una pregunta de calificación.",
         "signals": [],
         "analysis_scope": scope[:500],
@@ -1042,14 +1442,53 @@ def _default_result(channel: str | None, today: date, scope: str = "") -> dict[s
     }
 
 
-def analyze_chat(transcript: str, *, channel: str | None = None, today: date | None = None) -> dict[str, Any]:
+def _contextual_signal_key(scope_normalized: str, previous_agent_normalized: str) -> str | None:
+    short_yes = bool(re.fullmatch(r"(si|correcto|exacto|asi es|claro)[,;.!]*", scope_normalized))
+    short_no = bool(re.fullmatch(r"(no|negativo|para nada|no lo hacemos)[,;.!]*", scope_normalized))
+    short_me = bool(re.fullmatch(r"(yo|conmigo|yo mismo|yo misma)[,;.!]*", scope_normalized))
+    if not previous_agent_normalized:
+        return None
+
+    asked_measurement = bool(
+        re.search(r"(forma clara de saber|cuantas consultas|miden|medir).*(citas|clientes|ventas|conversion)", previous_agent_normalized)
+        or re.search(r"(conversion).*(consultas|citas|ventas)", previous_agent_normalized)
+    )
+    if asked_measurement and short_no:
+        return "maikol_not_measuring"
+    if asked_measurement and short_yes:
+        return "maikol_yes_measuring"
+
+    asked_system = bool(re.search(r"(utilizan|usan|tienen|cuentan con).*(sistema|crm|software|plataforma)", previous_agent_normalized))
+    if asked_system and short_no:
+        return "maikol_no_system"
+    if asked_system and short_yes:
+        return "maikol_uses_system"
+
+    asked_responsible = bool(re.search(r"(con quien|quien).*(conversar|hablar|encargad|supervisa|maneja)", previous_agent_normalized))
+    if asked_responsible and (short_me or bool(re.fullmatch(r"(soy yo|yo lo manejo|yo me encargo)[,;.!]*", scope_normalized))):
+        return "maikol_decision_maker_present"
+
+    asked_owner_scope = bool(re.search(r"esa persona supervisa.*(seguimiento|conversion)", previous_agent_normalized))
+    if asked_owner_scope and short_yes:
+        return "maikol_decision_maker_present"
+    return None
+
+
+def analyze_chat(
+    transcript: str,
+    *,
+    channel: str | None = None,
+    today: date | None = None,
+    setter_name: str | None = None,
+) -> dict[str, Any]:
     original = transcript or ""
-    scope = _analysis_scope(original)
+    scope, previous_agent_message = _analysis_context(original, setter_name)
     normalized = _normalize(scope)
+    previous_agent_normalized = _normalize(previous_agent_message)
     current_date = today or date.today()
 
     if len(normalized) < 2:
-        empty = _default_result(channel, current_date, scope)
+        empty = _default_result(channel, current_date, scope, setter_name)
         empty.update({
             "confidence": 0,
             "summary": "No hay suficiente texto para analizar.",
@@ -1059,10 +1498,35 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
         return empty
 
     matches: list[dict[str, Any]] = []
+    contextual_key = _contextual_signal_key(normalized, previous_agent_normalized)
+    contextual_signal = next((signal for signal in SIGNALS if signal.key == contextual_key), None)
+    if contextual_signal:
+        matches.append({
+            "key": contextual_signal.key,
+            "label": contextual_signal.label,
+            "priority": contextual_signal.priority + 1000,
+            "confidence": contextual_signal.confidence,
+            "order": -1,
+            "outcome": contextual_signal.outcome,
+            "conversation_status": contextual_signal.conversation_status,
+            "commercial_status": contextual_signal.commercial_status,
+            "next_step": contextual_signal.next_step,
+            "recommended_reply": contextual_signal.recommended_reply,
+            "reasoning": contextual_signal.reasoning,
+            "objection": contextual_signal.objection,
+            "followup_delay_days": contextual_signal.followup_delay_days,
+            "is_terminal": contextual_signal.is_terminal,
+            "appointment_booked": contextual_signal.appointment_booked,
+            "followup_mode": contextual_signal.followup_mode,
+            "evidence": scope[:220],
+        })
+
     for index, signal in enumerate(SIGNALS):
         for pattern_text in signal.patterns:
             pattern = re.compile(pattern_text, re.IGNORECASE)
             if pattern.search(normalized):
+                if contextual_key == signal.key:
+                    break
                 matches.append({
                     "key": signal.key,
                     "label": signal.label,
@@ -1079,12 +1543,13 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
                     "followup_delay_days": signal.followup_delay_days,
                     "is_terminal": signal.is_terminal,
                     "appointment_booked": signal.appointment_booked,
-                    "evidence": _excerpt(original, pattern),
+                    "followup_mode": signal.followup_mode,
+                    "evidence": _excerpt(original, pattern, setter_name),
                 })
                 break
 
     if not matches:
-        return _default_result(channel, current_date, scope)
+        return _default_result(channel, current_date, scope, setter_name)
 
     matches.sort(key=lambda item: (-int(item["priority"]), int(item["order"])))
     primary = matches[0]
@@ -1094,8 +1559,11 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
     if not final:
         followup = _suggest_followup(normalized, current_date)
         if not followup:
-            delay = primary.get("followup_delay_days")
-            followup = (current_date + timedelta(days=int(delay if delay is not None else 1))).isoformat()
+            delay = int(primary.get("followup_delay_days") if primary.get("followup_delay_days") is not None else 1)
+            if primary.get("followup_mode") == "next_business_day":
+                followup = _next_business_day(current_date, delay).isoformat()
+            else:
+                followup = (current_date + timedelta(days=delay)).isoformat()
 
     confidence = min(99, int(primary["confidence"]) + min(5, max(0, len(matches) - 1)))
     secondary_labels = [item["label"].lower() for item in matches[1:2]]
@@ -1123,18 +1591,18 @@ def analyze_chat(transcript: str, *, channel: str | None = None, today: date | N
 
     clean_signals = [
         {key: value for key, value in item.items() if key not in {
-            "order", "recommended_reply", "reasoning", "followup_delay_days", "is_terminal", "appointment_booked",
+            "order", "recommended_reply", "reasoning", "followup_delay_days", "is_terminal", "appointment_booked", "followup_mode",
         }}
         for item in matches[:3]
     ]
 
     return {
-        "method": "aura_response_library_v3",
-        "library_version": "2026.07.29",
+        "method": "aura_setter_playbook_v3",
+        "library_version": "2026.07.29.5",
         "confidence": confidence,
         "summary": summary,
-        "recommended_reply": primary["recommended_reply"],
-        "reasoning": primary["reasoning"],
+        "recommended_reply": _personalize_setter_text(primary["recommended_reply"], setter_name),
+        "reasoning": _personalize_setter_text(primary["reasoning"], setter_name),
         "signals": clean_signals,
         "analysis_scope": scope[:500],
         "classification": {

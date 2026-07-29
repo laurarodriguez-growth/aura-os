@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
@@ -304,6 +305,69 @@ def utcnow_iso() -> str:
 
 def _first(response: Any) -> dict[str, Any] | None:
     return (response.data or [None])[0]
+
+
+def _missing_column_from_error(exc: Exception, table: str) -> str | None:
+    message = str(exc)
+    patterns = (
+        rf"Could not find the ['\"](?P<column>[A-Za-z0-9_]+)['\"] column of ['\"]{re.escape(table)}['\"]",
+        rf"column ['\"](?P<column>[A-Za-z0-9_]+)['\"] of relation ['\"]{re.escape(table)}['\"] does not exist",
+        rf"column {re.escape(table)}\.(?P<column>[A-Za-z0-9_]+) does not exist",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, message, flags=re.IGNORECASE)
+        if match:
+            return match.group("column")
+    return None
+
+
+def _insert_row_compatible(
+    db: Any,
+    table: str,
+    row: dict[str, Any],
+    *,
+    protected_columns: set[str] | None = None,
+) -> tuple[Any, dict[str, Any], list[str]]:
+    # Retry without only the optional column PostgREST reports as absent.
+    current = dict(row)
+    protected = protected_columns or set()
+    removed: list[str] = []
+    for _ in range(len(current) + 1):
+        try:
+            return db.table(table).insert(current).execute(), current, removed
+        except Exception as exc:
+            missing = _missing_column_from_error(exc, table)
+            if not missing or missing not in current or missing in protected:
+                raise
+            removed.append(missing)
+            current.pop(missing, None)
+            logger.warning("Columna opcional ausente en %s: %s. Reintentando guardado.", table, missing)
+    raise RuntimeError(f"No se pudo insertar en {table} después de ajustar el esquema")
+
+
+def _update_row_compatible(
+    db: Any,
+    table: str,
+    row: dict[str, Any],
+    match_column: str,
+    match_value: Any,
+) -> tuple[Any | None, dict[str, Any], list[str]]:
+    current = dict(row)
+    removed: list[str] = []
+    for _ in range(len(current) + 1):
+        if not current:
+            return None, current, removed
+        try:
+            response = db.table(table).update(current).eq(match_column, match_value).execute()
+            return response, current, removed
+        except Exception as exc:
+            missing = _missing_column_from_error(exc, table)
+            if not missing or missing not in current:
+                raise
+            removed.append(missing)
+            current.pop(missing, None)
+            logger.warning("Columna opcional ausente en %s: %s. Reintentando actualización.", table, missing)
+    raise RuntimeError(f"No se pudo actualizar {table} después de ajustar el esquema")
 
 
 def _fetch_all(table: str, columns: str = "*", filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
@@ -1517,7 +1581,12 @@ def chat_analysis(
     payload: ChatAnalysisRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    return analyze_chat(payload.transcript, channel=payload.channel, today=panama_today())
+    return analyze_chat(
+        payload.transcript,
+        channel=payload.channel,
+        today=panama_today(),
+        setter_name=user.full_name,
+    )
 
 
 @app.post("/api/leads/{lead_id}/call-logs")
@@ -1540,7 +1609,7 @@ def create_call_log(
     occurred_at = payload.occurred_at or datetime.now(timezone.utc)
     outcome_definition = get_outcome_definition(payload.outcome_id, payload.outcome)
     outcome_name = outcome_definition.get("name") if outcome_definition else payload.outcome
-    outcome_id = outcome_definition.get("id") if outcome_definition else payload.outcome_id
+    outcome_id = (outcome_definition.get("id") if outcome_definition else payload.outcome_id) or None
 
     conversation_status = payload.conversation_status
     if outcome_definition and outcome_definition.get("is_terminal"):
@@ -1552,7 +1621,7 @@ def create_call_log(
     if not followup_date:
         followup_date = suggested_followup_date(outcome_definition, panama_today())
 
-    commercial_status = outcome_definition.get("recommended_commercial_status") if outcome_definition else payload.commercial_status
+    commercial_status = payload.commercial_status or (outcome_definition.get("recommended_commercial_status") if outcome_definition else None)
     if commercial_status not in STATUSES:
         commercial_status = None
     outcome_stage = derive_outcome_stage(conversation_status, outcome_definition, followup_date, commercial_status or lead.get("status"))
@@ -1583,16 +1652,30 @@ def create_call_log(
     if outcome_definition and not row.get("next_step") and outcome_definition.get("recommended_next_step"):
         row["next_step"] = outcome_definition["recommended_next_step"]
 
-    response = db.table("call_logs").insert(row).execute()
-    call = _first(response) or row
+    try:
+        response, inserted_row, removed_call_columns = _insert_row_compatible(
+            db,
+            "call_logs",
+            row,
+            protected_columns={"lead_id", "occurred_at", "channel", "direction", "outcome"},
+        )
+    except Exception as exc:
+        logger.exception("No se pudo guardar la interacción del lead %s", lead_id)
+        raise HTTPException(status_code=400, detail=f"No se pudo guardar la interacción: {exc}") from exc
+    call = _first(response) or inserted_row
 
     attempt_count = int(lead.get("contact_attempts") or 0)
     if _counts_as_contact_attempt(payload):
-        rpc_data = db.rpc("increment_lead_contact_attempts", {"p_lead_id": lead_id}).execute().data
-        if isinstance(rpc_data, list):
-            attempt_count = int(rpc_data[0]) if rpc_data else attempt_count + 1
-        else:
-            attempt_count = int(rpc_data or attempt_count + 1)
+        try:
+            rpc_data = db.rpc("increment_lead_contact_attempts", {"p_lead_id": lead_id}).execute().data
+            if isinstance(rpc_data, list):
+                attempt_count = int(rpc_data[0]) if rpc_data else attempt_count + 1
+            else:
+                attempt_count = int(rpc_data or attempt_count + 1)
+        except Exception:
+            # Algunas instalaciones perdieron la función SQL; el contacto igual debe guardarse.
+            attempt_count += 1
+            logger.exception("No se pudo ejecutar increment_lead_contact_attempts; se usará el conteo local")
 
     lead_update: dict[str, Any] = {
         "last_contact_date": row["occurred_at"],
@@ -1625,6 +1708,8 @@ def create_call_log(
         lead_update["first_contact_date"] = panama_today().isoformat()
     if followup_date:
         lead_update["next_followup_date"] = followup_date.isoformat() if hasattr(followup_date, "isoformat") else followup_date
+    elif final_outcome:
+        lead_update["next_followup_date"] = None
     if final_outcome:
         lead_update["final_outcome_at"] = row["occurred_at"]
 
@@ -1639,7 +1724,15 @@ def create_call_log(
     if outcome_definition and outcome_definition.get("code") == "do_not_contact":
         lead_update["do_not_contact"] = True
 
-    db.table("leads").update(lead_update).eq("id", lead_id).execute()
+    lead_update_warning = ""
+    removed_lead_columns: list[str] = []
+    try:
+        _, _, removed_lead_columns = _update_row_compatible(db, "leads", lead_update, "id", lead_id)
+    except Exception:
+        # La interacción ya fue guardada. No devolvemos un falso fracaso que invite a duplicarla.
+        lead_update_warning = "La interacción se guardó, pero la ficha no pudo actualizar toda la clasificación automáticamente."
+        logger.exception("Interacción guardada, pero no se pudo actualizar el lead %s", lead_id)
+
     description_outcome = outcome_name if outcome_name != "Pendiente" else conversation_status
     _log_activity(
         lead_id,
@@ -1654,6 +1747,13 @@ def create_call_log(
             "outcome_id": outcome_id,
         },
     )
+    if removed_call_columns or removed_lead_columns:
+        call["schema_compatibility"] = {
+            "call_logs_columns_omitted": removed_call_columns,
+            "lead_columns_omitted": removed_lead_columns,
+        }
+    if lead_update_warning:
+        call["save_warning"] = lead_update_warning
     return call
 
 

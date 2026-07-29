@@ -143,12 +143,18 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
     setSaving(true);
     setError('');
     try {
-      await api(`/api/leads/${leadId}/call-logs`, { method: 'POST', body: JSON.stringify(payload) });
-      await load();
-      onChanged?.();
+      const created = await api(`/api/leads/${leadId}/call-logs`, { method: 'POST', body: JSON.stringify(payload) });
+      setLead((current) => current ? {
+        ...current,
+        call_logs: [created, ...(current.call_logs || []).filter((item) => item.id !== created.id)],
+      } : current);
       setTab('history');
+      onChanged?.();
+      await load();
+      return created;
     } catch (e) {
       setError(e.message);
+      throw e;
     } finally {
       setSaving(false);
     }
@@ -209,7 +215,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                   <span><CheckCircle2 size={17} /></span>
                   <div>
                     <strong>Clasificación automática</strong>
-                    <small>Aura actualiza estos datos cuando Maikol guarda una actividad o una respuesta.</small>
+                    <small>Aura actualiza estos datos cuando el setter guarda una actividad o una respuesta.</small>
                   </div>
                 </div>
 
@@ -222,7 +228,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
               </section>
 
               <details className="advanced-options manual-classification-options">
-                <summary><ChevronDown size={17} />Corregir clasificación manualmente</summary>
+                <summary><ChevronDown size={17} />Ajustar manualmente</summary>
                 <div className="advanced-options-body">
                   <div className="form-grid two classification-primary-grid">
                     <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>

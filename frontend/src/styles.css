@@ -3308,3 +3308,11 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   .performance-activity-list > button { grid-template-columns: auto minmax(0,1fr); }
   .performance-activity-list time { grid-column: 2; }
 }
+
+/* Guardado de actividad: el error queda visible junto al botón, incluso al final del drawer móvil. */
+.contact-save-error {
+  margin: 12px 0 8px;
+  position: sticky;
+  bottom: 82px;
+  z-index: 7;
+}

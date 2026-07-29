@@ -1,4 +1,31 @@
-const AGENT_HINTS = ['maikol', 'laura', 'growth by laura', 'aura os', 'aura grow'];
+const BASE_AGENT_HINTS = ['maikol', 'laura', 'growth by laura', 'aura os', 'aura grow'];
+
+function normalizedSetterName(value = '') {
+  return String(value || '').replace(/\s+/g, ' ').trim() || 'Growth by Laura';
+}
+
+function setterFirstName(value = '') {
+  const fullName = normalizedSetterName(value);
+  return fullName === 'Growth by Laura' ? fullName : fullName.split(' ')[0];
+}
+
+function personalizeSetterText(value, setterName = '') {
+  const fullName = normalizedSetterName(setterName);
+  const firstName = setterFirstName(fullName);
+  return String(value || '')
+    .replace(/\bMaikol Brown\b/g, fullName)
+    .replace(/\bMaikol\b/g, firstName);
+}
+
+function agentHints(setterName = '') {
+  const fullName = normalizeChatText(normalizedSetterName(setterName));
+  const firstName = fullName.split(' ')[0] || '';
+  return [...new Set([
+    ...BASE_AGENT_HINTS,
+    fullName,
+    firstName.length >= 4 ? firstName : '',
+  ].filter(Boolean))];
+}
 
 export function normalizeChatText(value = '') {
   return value
@@ -29,19 +56,52 @@ function parseExportMessages(text = '') {
   return messages.filter((item) => item.message);
 }
 
-export function chatAnalysisScope(text = '') {
+function isAgentSender(sender = '', setterName = '') {
+  const normalized = normalizeChatText(sender);
+  return agentHints(setterName).some((hint) => normalized.includes(hint));
+}
+
+export function chatAnalysisContext(text = '', setterName = '') {
   const messages = parseExportMessages(text);
-  if (!messages.length) return String(text || '');
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const sender = normalizeChatText(messages[index].sender);
-    if (!AGENT_HINTS.some((hint) => sender.includes(hint))) return messages[index].message;
+  if (!messages.length) {
+    return { scope: String(text || ''), previousAgentMessage: '', messages: [] };
   }
-  return messages[messages.length - 1].message;
+  let leadIndex = messages.length - 1;
+  while (leadIndex >= 0 && isAgentSender(messages[leadIndex].sender, setterName)) leadIndex -= 1;
+  if (leadIndex < 0) leadIndex = messages.length - 1;
+  let previousAgentMessage = '';
+  for (let index = leadIndex - 1; index >= 0; index -= 1) {
+    if (isAgentSender(messages[index].sender, setterName)) {
+      previousAgentMessage = messages[index].message;
+      break;
+    }
+  }
+  return {
+    scope: messages[leadIndex]?.message || messages[messages.length - 1].message,
+    previousAgentMessage,
+    messages,
+  };
+}
+
+export function chatAnalysisScope(text = '', setterName = '') {
+  return chatAnalysisContext(text, setterName).scope;
 }
 
 function localISODate(daysFromToday = 0) {
   const value = new Date();
   value.setDate(value.getDate() + daysFromToday);
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function nextBusinessISODate(daysFromToday = 1) {
+  const value = new Date();
+  value.setDate(value.getDate() + daysFromToday);
+  while (value.getDay() === 0 || value.getDay() === 6) {
+    value.setDate(value.getDate() + 1);
+  }
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const day = String(value.getDate()).padStart(2, '0');
@@ -101,10 +161,415 @@ function evidenceLine(scope, patterns) {
 }
 
 export const CHAT_RESPONSE_LIBRARY = [
+
+  {
+    key: 'maikol_outside_hours',
+    label: 'respuesta automática fuera de horario',
+    priority: 140,
+    confidence: 98,
+    patterns: [
+      /\b(fuera de|fuera del) (nuestro )?horario\b/i,
+      /\bhorario de atencion\b/i,
+      /\ben este momento estamos (cerrados|fuera de servicio)\b/i,
+      /\bte responderemos (pronto|en horario|cuando regresemos)\b/i,
+      /\bnuestro horario es de\b/i,
+    ],
+    outcome: 'Respuesta automática fuera de horario',
+    status: 'followup_scheduled',
+    commercialStatus: 'Contactado',
+    followupMode: 'next_business_day',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Retomar el próximo día hábil entre 9:15 a. m. y 10:30 a. m.',
+    reply: 'Hola 😊 Retomo mi mensaje dentro de su horario de atención. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Vimos una posible oportunidad relacionada con el seguimiento de sus consultas por WhatsApp. ¿Con quién podría conversar sobre marketing, ventas o gestión de pacientes?',
+    reasoning: 'Respondió una automatización, no una persona. El lead sigue abierto y debe retomarse dentro del horario de atención.',
+  },
+  {
+    key: 'maikol_bot_name_reason',
+    label: 'bot solicitó nombre y motivo',
+    priority: 139,
+    confidence: 98,
+    patterns: [
+      /\b(indica|indiquenos|escribe|compartenos|ingresa) (tu|su)? ?nombre\b/i,
+      /\b(cual es|indica|indiquenos|escribe) (el )?motivo\b/i,
+      /\b(nombre completo|motivo de contacto|motivo de la consulta)\b/i,
+      /\bpara poder ayudarte.*\bnombre\b/i,
+    ],
+    outcome: 'Bot pidió nombre y motivo',
+    status: 'waiting_decision_maker',
+    commercialStatus: 'Contactado',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Responder al bot y solicitar a la persona encargada.',
+    reply: 'Hola 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Motivo: queremos compartirles una observación breve sobre su proceso de atención por WhatsApp que podría ayudarles a convertir más consultas en citas. ¿Con quién podría conversarlo?',
+    reasoning: 'El bot está filtrando el contacto. Maikol debe identificarse con transparencia y pedir una sola derivación.',
+  },
+  {
+    key: 'maikol_patient_flow',
+    label: 'flujo automático de paciente',
+    priority: 138,
+    confidence: 97,
+    patterns: [
+      /^\s*quiero agendar una cita\s*[.!]*$/i,
+      /^\s*quiero mas informacion\s*[.!]*$/i,
+      /\b(agendar|reservar|confirmar) (una )?(cita|consulta)\b/i,
+      /\bselecciona (el|un) (servicio|tratamiento|especialidad)\b/i,
+      /\bdatos del paciente\b/i,
+    ],
+    outcome: 'WhatsApp abrió flujo de paciente',
+    status: 'waiting_response',
+    commercialStatus: 'Contactado',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Borrar el texto de paciente, aclarar el motivo comercial y confirmar si el seguimiento es manual o utiliza un sistema.',
+    reply: 'Hola 😊 Gracias por responder. No escribo como paciente. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+    reasoning: 'WhatsApp abrió un flujo de paciente. Maikol debe borrar el texto predeterminado, aclarar que no escribe como paciente y hacer la pregunta sobre el sistema de seguimiento.',
+  },
+  {
+    key: 'maikol_auto_welcome',
+    label: 'respuesta automática de bienvenida',
+    priority: 137,
+    confidence: 96,
+    patterns: [
+      /\bgracias por (comunicarte|comunicarse|contactarnos|escribirnos)\b/i,
+      /\bhemos recibido (tu|su) (mensaje|consulta|solicitud)\b/i,
+      /\buno de (nuestros|nuestro) (asesores|agentes|representantes) (te|le) respondera\b/i,
+      /\bbienvenid[oa]s? a\b/i,
+      /\btu mensaje ha sido recibido\b/i,
+    ],
+    outcome: 'Respondió',
+    status: 'waiting_response',
+    commercialStatus: 'Contactado',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Confirmar si el seguimiento de consultas es manual o utiliza un sistema.',
+    reply: 'Hola 😊 Gracias por responder. No escribo como paciente. Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+    reasoning: 'La bienvenida automática no es una respuesta comercial humana. El script actualizado pide aclarar que no se escribe como paciente y abrir con una sola pregunta sobre el seguimiento.',
+  },
+  {
+    key: 'maikol_send_info_here',
+    label: 'solicitud de enviar información por el mismo chat',
+    priority: 136,
+    confidence: 97,
+    patterns: [
+      /\b(puede|puedes|pueden|pueden ustedes) (enviar|mandar|compartir)(nos|me)? (la|esa|mas)? ?(informacion|info|detalles) (por aqui|aqui|por este medio)\b/i,
+      /\benvie(n)? (la|esa|mas)? ?(informacion|info|detalles) (por aqui|aqui|por este medio)\b/i,
+      /\bmandalo por aqui\b/i,
+      /\b(puede|puedes|pueden) enviar(la|lo)? por aqui\b/i,
+    ],
+    outcome: 'Solicitó información',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Confirmar si el seguimiento es manual o si utilizan un sistema.',
+    reply: 'Claro 😊 Laura realiza un diagnóstico del proceso de atención y seguimiento comercial. Revisa cómo reciben las consultas, cómo las califican, qué seguimiento realizan y en qué puntos podrían estar perdiéndose oportunidades. Luego entrega recomendaciones concretas para mejorar el proceso. No es un servicio de manejo de redes ni publicidad. ¿Actualmente el seguimiento de las personas que consultan por WhatsApp se realiza manualmente o utilizan algún sistema?',
+    reasoning: 'El lead abrió la conversación, pero todavía falta una sola pregunta de diagnóstico antes de enviar información.',
+  },
+  {
+    key: 'maikol_no_system',
+    label: 'seguimiento manual o sin sistema',
+    priority: 135,
+    confidence: 97,
+    patterns: [
+      /\b(no tenemos|no usamos|no utilizamos|no contamos con) (ningun )?(sistema|crm|software|plataforma|automatizacion)\b/i,
+      /\b(se hace|lo hacemos|es|todo es) manual\b/i,
+      /\bdepende de (una persona|alguien|recepcion|la recepcionista)\b/i,
+      /\b(lo llevamos|usamos) (en )?(excel|google sheets|una libreta|papel|whatsapp)\b/i,
+    ],
+    outcome: 'Respondió',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: 'Proceso manual',
+    nextStep: 'Registrar que el proceso es manual y observar la siguiente respuesta antes de avanzar.',
+    reply: 'Entiendo 😊 Probablemente el seguimiento depende de que alguien recuerde responder, retomar conversaciones y confirmar citas. Justamente ayudamos a los negocios a organizar ese proceso para que menos consultas se pierdan y más personas terminen agendando.',
+    reasoning: 'Se confirmó una operación manual. El script actualizado explica brevemente la brecha sin agregar otra pregunta en ese mismo mensaje.',
+  },
+  {
+    key: 'maikol_uses_system',
+    label: 'ya utiliza un sistema',
+    priority: 134,
+    confidence: 96,
+    patterns: [
+      /\b(si|sí),? (tenemos|usamos|utilizamos|contamos con) (un|una|el|la)? ?(sistema|crm|software|plataforma|automatizacion|bot|chatbot)\b/i,
+      /\b(tenemos|usamos|utilizamos|trabajamos con) (kommo|hubspot|zoho|salesforce|monday|trello|whatsapp business)\b/i,
+      /\bya (tenemos|usamos|utilizamos) (un|una|el|la)? ?(sistema|crm|software|plataforma)\b/i,
+      /\bya esta (automatizado|sistematizado)\b/i,
+    ],
+    outcome: 'Objeción identificada',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: 'Ya utiliza sistema o CRM',
+    nextStep: 'Identificar qué sistema utilizan y quién supervisa el proceso.',
+    reply: 'Perfecto 😊 Eso ya es un buen avance. Muchas veces el problema no es tener o no una herramienta, sino cómo se utiliza para dar seguimiento, recuperar conversaciones y convertir consultas en citas. ¿Qué sistema utilizan actualmente y quién supervisa este proceso?',
+    reasoning: 'Tener sistema no cierra la oportunidad. El script pide identificar la herramienta y al responsable.',
+  },
+  {
+    key: 'maikol_decision_maker_present',
+    label: 'apareció la persona encargada',
+    priority: 133,
+    confidence: 96,
+    patterns: [
+      /\b(yo soy|soy) (la|el)? ?(encargad[oa]|responsable|administrador[a]?|gerente)\b/i,
+      /\b(yo|conmigo) (lo manejo|lo veo|me encargo|puede hablar|puedes hablar)\b/i,
+      /\bhabla conmigo\b/i,
+      /\bese tema lo (veo|manejo) yo\b/i,
+    ],
+    outcome: 'Respondió',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Confirmar si miden cuántas consultas se convierten en citas o clientes.',
+    reply: 'Hola, mucho gusto 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estuvimos revisando brevemente su proceso de atención y detectamos una posible oportunidad relacionada con el seguimiento de las consultas que reciben por WhatsApp. ¿Actualmente tienen una forma clara de saber cuántas consultas terminan convirtiéndose en citas o clientes?',
+    reasoning: 'Ya apareció el responsable. El script pasa de derivación a una sola pregunta de medición.',
+  },
+  {
+    key: 'maikol_not_measuring',
+    label: 'no mide conversión de consultas',
+    priority: 132,
+    confidence: 97,
+    patterns: [
+      /\b(no medimos|no lo medimos|no llevamos metricas|no tenemos metricas)\b/i,
+      /\bno (sabemos|se) cuantas? (consultas|personas|conversaciones) (terminan|se convierten|agendan)\b/i,
+      /\bno llevamos (ese|un) control\b/i,
+      /\bno tenemos forma de saber\b/i,
+      /\bno calculamos (la )?conversion\b/i,
+    ],
+    outcome: 'Interesado',
+    status: 'conversation_active',
+    commercialStatus: 'Interesado',
+    followupDelayDays: 0,
+    terminal: false,
+    appointmentBooked: false,
+    objection: 'No mide conversión',
+    nextStep: 'Ofrecer dos horarios cerrados para una llamada de 15 minutos.',
+    reply: 'Entiendo. Eso suele hacer que muchas oportunidades se pierdan sin que el negocio pueda identificar exactamente dónde ocurrió. Laura está realizando revisiones breves de procesos comerciales para detectar posibles fugas en atención, seguimiento y conversión. Podríamos mostrarle en una llamada de 15 minutos qué observamos y qué mejora puntual podría aplicar. Laura tiene disponibilidad [OPCIÓN 1] o [OPCIÓN 2]. ¿Cuál de esos dos horarios le funciona mejor?',
+    reasoning: 'La falta de medición confirma una brecha concreta. El siguiente paso es ofrecer dos horarios, no pedir disponibilidad abierta.',
+  },
+  {
+    key: 'maikol_metric_provided',
+    label: 'compartió el indicador que utiliza',
+    priority: 131,
+    confidence: 92,
+    patterns: [
+      /\b(medimos|calculamos|revisamos|seguimos) (por|con|la|el) (porcentaje|tasa|numero|cantidad|dashboard|reporte)\b/i,
+      /\b(tasa|porcentaje) de conversion\b/i,
+      /\b(consultas|leads|mensajes).*(citas|ventas|clientes).*(porcentaje|tasa|reporte|dashboard)\b/i,
+      /\b(kpi|indicador) (es|principal|que usamos)\b/i,
+    ],
+    outcome: 'Interesado',
+    status: 'conversation_active',
+    commercialStatus: 'Interesado',
+    followupDelayDays: 0,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Relacionar el indicador con el hallazgo y ofrecer dos horarios.',
+    reply: 'Gracias. Lo que observamos parece estar más relacionado con [TIEMPO DE RESPUESTA / SEGUIMIENTO / RECUPERACIÓN DE CONVERSACIONES / CLARIDAD DEL PRÓXIMO PASO]. Laura podría mostrarle el hallazgo en una llamada breve de 15 minutos. Tiene disponibilidad [OPCIÓN 1] o [OPCIÓN 2]. ¿Cuál le funciona mejor?',
+    reasoning: 'El lead ya explicó cómo mide. Aura deja marcado el espacio que Maikol debe adaptar al hallazgo real antes de copiar.',
+  },
+  {
+    key: 'maikol_yes_measuring',
+    label: 'sí mide la conversión',
+    priority: 130,
+    confidence: 94,
+    patterns: [
+      /\b(si|sí),? (medimos|lo medimos|llevamos metricas|tenemos metricas|llevamos control)\b/i,
+      /\btenemos (un )?(reporte|dashboard|control) de conversion\b/i,
+      /\bsabemos cuantas? (consultas|personas) (agendan|se convierten)\b/i,
+    ],
+    outcome: 'Respondió',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Preguntar qué indicador utilizan para medir la conversión.',
+    reply: 'Perfecto 😊 Eso ya los coloca por delante de muchos negocios. Para entender mejor, ¿qué indicador utilizan actualmente para medir la conversión de consultas en citas o ventas?',
+    reasoning: 'La empresa sí mide. El script pide identificar el indicador antes de proponer la llamada.',
+  },
+  {
+    key: 'maikol_information_request',
+    label: 'pidió más información',
+    priority: 129,
+    confidence: 96,
+    patterns: [
+      /\b(enviame|mandame|comparteme|pasame|envie|mande) (la|mas|esa|algo de)? ?(informacion|info|propuesta|presentacion|detalles)\b/i,
+      /\bquiero (ver|conocer|saber) mas\b/i,
+      /\bde que se trata\b/i,
+      /\bcomo funciona\b/i,
+    ],
+    outcome: 'Solicitó información',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Identificar si el reto principal es responder, dar seguimiento o lograr citas.',
+    reply: 'Claro 😊 Para enviarte algo realmente útil y no una presentación genérica, quisiera confirmar algo primero: ¿el principal reto que tienen actualmente está en responder las consultas, dar seguimiento o lograr que las personas agenden?',
+    reasoning: 'El script evita enviar presentaciones genéricas y utiliza una sola pregunta para ubicar el problema principal.',
+  },
+  {
+    key: 'maikol_price_request',
+    label: 'preguntó el precio',
+    priority: 128,
+    confidence: 97,
+    patterns: [
+      /\bcuanto (cuesta|sale|vale|cobran)\b/i,
+      /\b(cual es|cuales son) (el|los|su|sus) (precio|precios|tarifa|tarifas|planes)\b/i,
+      /\bque precio tiene\b/i,
+      /\b(enviame|mandame|envienos) (los|el)? ?(precios|tarifas|planes|cotizacion)\b/i,
+    ],
+    outcome: 'Solicitó información',
+    status: 'conversation_active',
+    commercialStatus: 'Interesado',
+    followupDelayDays: 0,
+    terminal: false,
+    appointmentBooked: false,
+    objection: 'Precio',
+    nextStep: 'Aclarar que la primera conversación es gratuita y ofrecer dos horarios.',
+    reply: 'La primera conversación de 15 minutos no tiene costo. Es únicamente para mostrarles la observación y determinar si vale la pena realizar una evaluación más completa. Si después identificamos que podemos ayudarles, Laura les explicará las opciones disponibles. ¿Les funciona mejor [OPCIÓN 1] o [OPCIÓN 2]?',
+    reasoning: 'Según el script, Maikol no cotiza por chat: explica el propósito de la llamada inicial y ofrece dos horarios.',
+  },
+  {
+    key: 'maikol_existing_owner',
+    label: 'ya cuenta con una persona encargada',
+    priority: 127,
+    confidence: 97,
+    patterns: [
+      /\bya (tenemos|contamos con|hay) (una persona|alguien|un encargado|una encargada|un equipo|personal)\b/i,
+      /\b(eso|el seguimiento|las consultas|whatsapp) (lo|las) (maneja|lleva|ve|atiende) (recepcion|la recepcionista|administracion|una persona|nuestro equipo|alguien)\b/i,
+      /\btenemos (quien|a alguien que) (responda|atienda|maneje|lleve)\b/i,
+      /\bya hay (encargado|encargada|responsable)\b/i,
+      /\btenemos (una recepcionista|un recepcionista|un asistente|una asistente) que (se encarga|lo maneja|lo lleva|responde)\b/i,
+    ],
+    outcome: 'Objeción identificada',
+    status: 'conversation_active',
+    commercialStatus: 'Respondió',
+    followupDelayDays: 1,
+    terminal: false,
+    appointmentBooked: false,
+    objection: 'Ya cuenta con encargado',
+    nextStep: 'Confirmar si esa persona también supervisa seguimiento y conversión.',
+    reply: 'Perfecto 😊 Justamente no buscamos reemplazar a la persona encargada. La revisión sirve para darle una segunda mirada al proceso y detectar posibles oportunidades de mejora. ¿Esa persona supervisa también el seguimiento y la conversión de las consultas?',
+    reasoning: 'La frase aclara que ya existe un responsable, pero no necesariamente rechaza la conversación.',
+  },
+  {
+    key: 'maikol_not_interested',
+    label: 'rechazo comercial explícito',
+    priority: 150,
+    confidence: 98,
+    patterns: [
+      /\b(no me interesa|no nos interesa|no le interesa|no les interesa|no interesa)\b/i,
+      /\bno (estoy|estamos|esta|estan) interesad[oa]s?\b/i,
+      /\b(no gracias|gracias pero no|prefiero que no|por ahora no)\b/i,
+      /\bno (quiero|queremos|deseo|deseamos) (continuar|seguir|avanzar|recibir informacion)\b/i,
+    ],
+    outcome: 'No interesado',
+    status: 'closed',
+    commercialStatus: 'No interesado',
+    followupDelayDays: null,
+    terminal: true,
+    appointmentBooked: false,
+    objection: 'No interesado',
+    nextStep: 'Retirar del seguimiento y conservar el historial.',
+    reply: 'Entendido 😊 Muchas gracias por responder. Los retiramos del seguimiento. Que tengan un excelente día.',
+    reasoning: 'Existe un rechazo claro. El script indica cerrar con respeto y no seguir calificando.',
+  },
+  {
+    key: 'maikol_referral',
+    label: 'referencia a otro contacto',
+    priority: 125,
+    confidence: 97,
+    patterns: [
+      /\b(escrib(e|ele|anle)|contact(a|e|en)|llam(a|e|en)) a (esta|esa|la|el) persona\b/i,
+      /\b(eso|este tema|marketing|ventas|las consultas) lo maneja (otra persona|[a-zñ ]{2,50})\b/i,
+      /\b(te|le|les) (paso|comparto|envio|doy) (el )?(numero|contacto|correo)\b/i,
+      /\bpregunta(le)? si (esta|estan) interesad[oa]s?\b/i,
+      /\bhabla con [a-zñ ]{2,50}\b/i,
+      /\bescribele a [a-zñ ]{2,50}\b/i,
+    ],
+    outcome: 'Referido a otro contacto',
+    status: 'followup_scheduled',
+    commercialStatus: 'Seguimiento 1',
+    followupDelayDays: 0,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Crear el referido como lead separado, registrar quién lo compartió y escribirle hoy.',
+    reply: 'Perfecto, muchas gracias por orientarme 😊 Le escribiré ahora mismo indicando que usted me compartió el contacto.',
+    reasoning: 'El lead original es referidor, no “No califica”. Debe conservarse y crear el nuevo contacto por separado.',
+  },
+  {
+    key: 'maikol_meeting_details',
+    label: 'envió datos para crear la reunión',
+    priority: 124,
+    confidence: 95,
+    patterns: [
+      /\b(correo|email)\s*(?:es|:|=|-)\s*[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i,
+      /^\s*[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\s*$/i,
+      /\b(nombre|cargo)\b.{0,160}\b[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}\b/i,
+    ],
+    outcome: 'Reunión agendada',
+    status: 'closed',
+    commercialStatus: 'Reunión agendada',
+    followupDelayDays: null,
+    terminal: true,
+    appointmentBooked: true,
+    objection: '',
+    nextStep: 'Crear la reunión en Google Meet y enviar la invitación al correo confirmado.',
+    reply: 'Gracias 😊 En unos minutos le comparto la invitación de Google Meet.',
+    reasoning: 'El contacto ya entregó el correo y los datos necesarios. El siguiente paso es crear la invitación, no volver a calificar.',
+  },
+  {
+    key: 'maikol_time_selected',
+    label: 'eligió uno de los horarios',
+    priority: 123,
+    confidence: 95,
+    patterns: [
+      /\b(la|el) (primera|segunda|primer|segundo) (opcion|horario)\b/i,
+      /\b(lunes|martes|miercoles|jueves|viernes|sabado|domingo).*(a las|am|pm|a\. m\.|p\. m\.)\b/i,
+      /\b(ese|este) horario (me|nos) (funciona|sirve|queda bien)\b/i,
+      /\b(me|nos) funciona (el|la|a las|a la)\b/i,
+      /\b(prefiero|elegimos|tomamos) (el|la)\b.*\b(horario|opcion|am|pm|a\. m\.|p\. m\.)\b/i,
+      /\b(confirmado|confirmada) para\b/i,
+    ],
+    outcome: 'Esperando confirmación',
+    status: 'waiting_confirmation',
+    commercialStatus: 'Interesado',
+    followupDelayDays: 0,
+    terminal: false,
+    appointmentBooked: false,
+    objection: '',
+    nextStep: 'Confirmar día y hora y solicitar nombre, cargo y correo.',
+    reply: 'Perfecto 😊 Queda confirmado para [DÍA, FECHA Y HORA]. La llamada será por Google Meet y tendrá una duración aproximada de 15 minutos. Para que Laura pueda aprovechar mejor la conversación, ¿me confirma nombre de la persona que participará, cargo y correo electrónico?',
+    reasoning: 'El horario fue elegido, pero todavía faltan los datos para crear la invitación.',
+  },
   {
     key: 'do_not_contact',
     label: 'Solicitud expresa de no contacto',
-    priority: 100,
+    priority: 170,
     confidence: 98,
     patterns: [
       /\b(no me escriban|no me escribas|no nos escriban|no vuelvas a escribir|dejen de escribirme|no me manden mensajes)\b/i,
@@ -219,10 +684,15 @@ export const CHAT_RESPONSE_LIBRARY = [
     priority: 95,
     confidence: 96,
     patterns: [
-      /\b(no me interesa|no nos interesa|no estoy interesad[oa]|no estamos interesad[oa]s)\b/i,
-      /\b(no gracias|gracias pero no|prefiero que no|paso por ahora)\b/i,
-      /\bno (quiero|queremos|deseo|deseamos) (continuar|seguir|avanzar|recibir informacion)\b/i,
+      /\b(no me interesa|no nos interesa|no le interesa|no les interesa|no interesa)\b/i,
+      /\bno (estoy|estamos|esta|estan|se encuentra|se encuentran) interesad[oa]s?\b/i,
+      /\b(?:el cliente|la cliente|el negocio|la empresa|ellos|ellas|nosotros|nosotras)?\s*(?:indica|dice|respondio|comenta|menciona|informo|informa)?\s*(?:que )?no (?:esta|estan|estamos|tiene|tienen|hay) (?:interes|interesad[oa]s?)\b/i,
+      /\bpor (?:el )?momento no (?:esta|estan|estamos|hay|tenemos|tienen) (?:interes|interesad[oa]s?)\b/i,
+      /\b(sin interes|no hay interes|no tenemos interes|no tienen interes|no es de (nuestro|su) interes)\b/i,
+      /\b(no gracias|gracias pero no|prefiero que no|paso por ahora|por ahora no)\b/i,
+      /\bno (quiero|queremos|deseo|deseamos|quiere|quieren) (continuar|seguir|avanzar|recibir informacion)\b/i,
       /\bno estamos buscando (eso|ese servicio|una solucion)\b/i,
+      /\b(rechaza|rechazaron|declina|declinaron) (la )?(propuesta|oferta|conversacion|servicio)\b/i,
     ],
     outcome: 'No interesado',
     status: 'closed',
@@ -954,9 +1424,9 @@ export const CHAT_RESPONSE_LIBRARY = [
     terminal: false,
     appointmentBooked: false,
     objection: '',
-    nextStep: 'Presentarse brevemente y hacer una pregunta de calificación.',
-    reply: 'Hola 😊 Soy Maikol y escribo de parte de Laura Rodriguez. Estamos revisando cómo las empresas gestionan y dan seguimiento a sus consultas. ¿Ese proceso lo manejan manualmente o utilizan algún sistema?',
-    reasoning: 'La persona abrió la conversación con un saludo. Aura recomienda presentarse con claridad y avanzar con una sola pregunta.',
+    nextStep: 'Presentarse brevemente y confirmar si el seguimiento es manual o utiliza un sistema.',
+    reply: 'Hola 😊 Soy Maikol Brown, asistente de consultoría de Growth by Laura. Estamos conversando con clínicas para entender cómo organizan y dan seguimiento a las personas que consultan por WhatsApp. Quería hacerles una pregunta breve: ¿actualmente ese seguimiento lo realizan manualmente o utilizan algún sistema?',
+    reasoning: 'La persona abrió la conversación con un saludo. Aura usa el primer contacto actualizado y hace una sola pregunta sobre el sistema de seguimiento.',
   }
 ];
 
@@ -971,12 +1441,52 @@ const CONVERSATION_LABELS = {
   closed: 'Cerrada',
 };
 
-export function analyzeChatLocally(transcript, channel = 'WhatsApp') {
-  const scope = chatAnalysisScope(transcript);
+function contextualRuleKey(scopeNormalized, previousAgentNormalized) {
+  const shortYes = /^(si|correcto|exacto|asi es|claro)[,;.!]*$/.test(scopeNormalized);
+  const shortNo = /^(no|negativo|para nada|no lo hacemos)[,;.!]*$/.test(scopeNormalized);
+  const shortMe = /^(yo|conmigo|yo mismo|yo misma)[,;.!]*$/.test(scopeNormalized);
+  if (!previousAgentNormalized) return null;
+
+  const askedMeasurement = /(forma clara de saber|cuantas consultas|miden|medir).*(citas|clientes|ventas|conversion)/.test(previousAgentNormalized)
+    || /(conversion).*(consultas|citas|ventas)/.test(previousAgentNormalized);
+  if (askedMeasurement && shortNo) return 'maikol_not_measuring';
+  if (askedMeasurement && shortYes) return 'maikol_yes_measuring';
+
+  const askedSystem = /(utilizan|usan|tienen|cuentan con).*(sistema|crm|software|plataforma)/.test(previousAgentNormalized);
+  if (askedSystem && shortNo) return 'maikol_no_system';
+  if (askedSystem && shortYes) return 'maikol_uses_system';
+
+  const askedResponsible = /(con quien|quien).*(conversar|hablar|encargad|supervisa|maneja)/.test(previousAgentNormalized);
+  if (askedResponsible && (shortMe || /^(soy yo|yo lo manejo|yo me encargo)[,;.!]*$/.test(scopeNormalized))) {
+    return 'maikol_decision_maker_present';
+  }
+
+  const askedOwnerScope = /esa persona supervisa.*(seguimiento|conversion)/.test(previousAgentNormalized);
+  if (askedOwnerScope && shortYes) return 'maikol_decision_maker_present';
+
+  return null;
+}
+
+export function analyzeChatLocally(transcript, channel = 'WhatsApp', options = {}) {
+  const setterName = normalizedSetterName(options?.setterName);
+  const context = chatAnalysisContext(transcript, setterName);
+  const scope = context.scope;
   const normalized = normalizeChatText(scope);
-  const matches = CHAT_RESPONSE_LIBRARY
-    .filter((rule) => rule.patterns.some((pattern) => pattern.test(normalized)))
-    .sort((a, b) => b.priority - a.priority);
+  const previousAgentNormalized = normalizeChatText(context.previousAgentMessage);
+  const contextualKey = contextualRuleKey(normalized, previousAgentNormalized);
+  const contextualRule = contextualKey
+    ? CHAT_RESPONSE_LIBRARY.find((rule) => rule.key === contextualKey)
+    : null;
+  const detectedMatches = CHAT_RESPONSE_LIBRARY
+    .filter((rule) => rule.patterns.some((pattern) => pattern.test(normalized)));
+  const matches = [contextualRule, ...detectedMatches]
+    .filter(Boolean)
+    .filter((rule, index, items) => items.findIndex((item) => item.key === rule.key) === index)
+    .sort((a, b) => {
+      if (a.key === contextualKey) return -1;
+      if (b.key === contextualKey) return 1;
+      return b.priority - a.priority;
+    });
 
   const fallback = {
     key: 'response',
@@ -984,8 +1494,8 @@ export function analyzeChatLocally(transcript, channel = 'WhatsApp') {
     outcome: 'Respondió',
     status: 'response_received',
     commercialStatus: 'Respondió',
-    nextStep: 'Responder, calificar la necesidad y acordar un próximo paso concreto.',
-    reply: 'Gracias por responder 😊 Para entender mejor el contexto, ¿cómo gestionan actualmente las consultas y el seguimiento de las personas que no compran o no agendan en el primer contacto?',
+    nextStep: 'Identificar al responsable o formular una sola pregunta de calificación.',
+    reply: 'Gracias por responder 😊 Para orientarme correctamente, ¿usted supervisa el seguimiento de las consultas por WhatsApp o debería conversar con otra persona?',
     reasoning: 'La conversación está abierta, pero todavía falta información para decidir el siguiente paso.',
     confidence: normalized.length < 2 ? 0 : 48,
     followupDelayDays: 1,
@@ -999,7 +1509,10 @@ export function analyzeChatLocally(transcript, channel = 'WhatsApp') {
   const explicitDate = explicitFollowupDate(normalized);
   const followupDate = finalOutcome
     ? null
-    : (explicitDate || localISODate(detected.followupDelayDays ?? 1));
+    : (explicitDate
+      || (detected.followupMode === 'next_business_day'
+        ? nextBusinessISODate(detected.followupDelayDays ?? 1)
+        : localISODate(detected.followupDelayDays ?? 1)));
   const confidence = Math.min(99, detected.confidence + Math.min(5, Math.max(0, matches.length - 1)));
   const suggestion = {
     activity_type: 'response_received',
@@ -1017,18 +1530,18 @@ export function analyzeChatLocally(transcript, channel = 'WhatsApp') {
   };
 
   return {
-    method: 'aura_response_library_browser_v3',
-    library_version: '2026.07.29',
+    method: 'aura_setter_playbook_browser_v3',
+    library_version: '2026.07.29.5',
     confidence,
     summary: matches.length
       ? `Aura detectó ${detected.label.toLowerCase()}${matches[1] ? ` y también ${matches[1].label.toLowerCase()}` : ''}.`
       : (normalized.length < 2
         ? 'No hay suficiente texto para analizar.'
         : 'Hubo respuesta, pero Aura no detectó una intención comercial suficientemente explícita.'),
-    recommended_reply: normalized.length < 2 ? '' : detected.reply,
+    recommended_reply: normalized.length < 2 ? '' : personalizeSetterText(detected.reply, setterName),
     reasoning: normalized.length < 2
       ? 'Pega una respuesta, un resumen o el TXT del chat para que Aura pueda proponer qué decir y cómo clasificarlo.'
-      : detected.reasoning,
+      : personalizeSetterText(detected.reasoning, setterName),
     signals: matches.slice(0, 3).map((item) => ({
       key: item.key,
       label: item.label,

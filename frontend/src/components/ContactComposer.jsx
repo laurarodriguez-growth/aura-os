@@ -13,6 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import { analyzeChatLocally } from '../lib/chatResponseLibrary';
 import FollowupDateField from './FollowupDateField';
 import OutcomeSelect, { useOutcomes } from './OutcomeSelect';
@@ -123,6 +124,40 @@ async function copyToClipboard(value) {
   document.body.removeChild(textarea);
 }
 
+function analysisStrength(result) {
+  const signalCount = Array.isArray(result?.signals) ? result.signals.length : 0;
+  const outcome = String(result?.suggestion?.outcome || result?.classification?.outcome || '').trim();
+  const isGeneric = !outcome || ['Respondió', 'Pendiente'].includes(outcome);
+  return (signalCount > 0 ? 1000 : 0) + (!isGeneric ? 200 : 0) + Number(result?.confidence || 0);
+}
+
+function mergeAnalysisResults(remoteResult, localResult) {
+  const remote = remoteResult || {};
+  const local = localResult || {};
+  const localWins = analysisStrength(local) > analysisStrength(remote);
+  const primary = localWins ? local : remote;
+  const secondary = localWins ? remote : local;
+  const complete = {
+    ...secondary,
+    ...primary,
+    recommended_reply: primary.recommended_reply || secondary.recommended_reply || '',
+    reasoning: primary.reasoning || secondary.reasoning || '',
+    signals: primary.signals?.length ? primary.signals : (secondary.signals || []),
+    classification: primary.classification || secondary.classification || {},
+    suggestion: { ...(secondary.suggestion || {}), ...(primary.suggestion || {}) },
+    warning: primary.warning || secondary.warning || 'Respuesta sugerida por Aura. Revísala antes de enviarla.',
+  };
+
+  // Una clasificación de cierre nunca debe quedar acompañada por una pregunta de prospección.
+  const isClosed = complete.suggestion?.conversation_status === 'closed' || complete.suggestion?.is_final_outcome;
+  const localIsSameOutcome = local.suggestion?.outcome && local.suggestion.outcome === complete.suggestion?.outcome;
+  if (isClosed && localIsSameOutcome && local.recommended_reply) {
+    complete.recommended_reply = local.recommended_reply;
+    complete.reasoning = local.reasoning || complete.reasoning;
+  }
+  return complete;
+}
+
 export default function ContactComposer({
   initialChannel = 'Llamada',
   initialMode = 'action',
@@ -131,6 +166,8 @@ export default function ContactComposer({
   onCancel,
   submitLabel,
 }) {
+  const { profile } = useAuth();
+  const setterName = String(profile?.full_name || '').trim() || 'Growth by Laura';
   const [mode, setMode] = useState(initialMode);
   const [form, setForm] = useState(() => initialForm(initialMode, initialChannel));
   const [analyzing, setAnalyzing] = useState(false);
@@ -139,6 +176,8 @@ export default function ContactComposer({
   const [copiedReply, setCopiedReply] = useState(false);
   const [error, setError] = useState('');
   const [fileNotice, setFileNotice] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState('');
   const [importedFile, setImportedFile] = useState(null);
   const fileInputRef = useRef(null);
   const {
@@ -156,10 +195,14 @@ export default function ContactComposer({
     setCopiedReply(false);
     setError('');
     setFileNotice('');
+    setSubmitError('');
     setImportedFile(null);
   };
 
-  const update = (changes) => setForm((current) => ({ ...current, ...changes }));
+  const update = (changes) => {
+    setSubmitError('');
+    setForm((current) => ({ ...current, ...changes }));
+  };
 
   const changeChannel = (channel) => {
     update({
@@ -185,6 +228,7 @@ export default function ContactComposer({
     setAnalysis(null);
     setAnalysisApplied(false);
     setCopiedReply(false);
+    setSubmitError('');
   };
 
   const applyOutcome = (item) => {
@@ -239,17 +283,8 @@ export default function ContactComposer({
   };
 
   const storeAnalysisResult = (result) => {
-    const localGuidance = analyzeChatLocally(form.transcript, form.channel);
-    const completeResult = {
-      ...localGuidance,
-      ...result,
-      recommended_reply: result?.recommended_reply || localGuidance.recommended_reply,
-      reasoning: result?.reasoning || localGuidance.reasoning,
-      signals: result?.signals?.length ? result.signals : localGuidance.signals,
-      classification: result?.classification || localGuidance.classification,
-      suggestion: { ...localGuidance.suggestion, ...(result?.suggestion || {}) },
-      warning: result?.warning || localGuidance.warning,
-    };
+    const localGuidance = analyzeChatLocally(form.transcript, form.channel, { setterName });
+    const completeResult = mergeAnalysisResults(result, localGuidance);
     setAnalysis(completeResult);
     setAnalysisApplied(true);
     setCopiedReply(false);
@@ -282,7 +317,7 @@ export default function ContactComposer({
       });
       storeAnalysisResult(result);
     } catch (_) {
-      storeAnalysisResult(analyzeChatLocally(form.transcript, form.channel));
+      storeAnalysisResult(analyzeChatLocally(form.transcript, form.channel, { setterName }));
     } finally {
       setAnalyzing(false);
     }
@@ -344,14 +379,23 @@ export default function ContactComposer({
     return Boolean(form.channel && form.conversation_status && hasOutcome && form.next_step.trim());
   }, [form, mode]);
 
-  const submit = () => {
-    if (!valid || saving) return;
-    onSubmit({
-      ...form,
-      followup_date: form.followup_date || null,
-      sale_amount: form.sale_amount === '' ? null : Number(form.sale_amount),
-      awaiting_response: ['waiting_response', 'waiting_confirmation', 'waiting_decision_maker'].includes(form.conversation_status),
-    });
+  const submit = async () => {
+    if (!valid || saving || submitting) return;
+    setSubmitting(true);
+    setSubmitError('');
+    try {
+      await onSubmit({
+        ...form,
+        outcome_id: form.outcome_id || null,
+        followup_date: form.followup_date || null,
+        sale_amount: form.sale_amount === '' ? null : Number(form.sale_amount),
+        awaiting_response: ['waiting_response', 'waiting_confirmation', 'waiting_decision_maker'].includes(form.conversation_status),
+      });
+    } catch (submitFailure) {
+      setSubmitError(submitFailure?.message || 'No se pudo guardar la interacción. Inténtalo nuevamente.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   const analysisClassification = analysis ? {
@@ -410,7 +454,7 @@ export default function ContactComposer({
             <CheckCircle2 size={18} />
             <div>
               <strong>Clasificación automática</strong>
-              <small>{mode === 'response' ? 'Aura completará estado, outcome y próximo paso al analizar.' : 'Aura registrará la acción y organizará el seguimiento.'}</small>
+              <small>{mode === 'response' ? `Aura personalizará la respuesta con ${setterName} y completará estado, outcome y próximo paso.` : 'Aura registrará la acción y organizará el seguimiento.'}</small>
             </div>
           </div>
         </div>
@@ -536,18 +580,19 @@ export default function ContactComposer({
           </section>
         )}
 
-        {(mode === 'action' || analysis) && (
+        {mode === 'action' && (
           <FollowupDateField
             value={form.followup_date}
             onChange={(value) => update({ followup_date: value })}
-            label={mode === 'response' ? 'Próximo seguimiento · Aura lo sugirió' : 'Próximo seguimiento'}
+            label="Próximo seguimiento"
           />
         )}
       </section>
 
-      <details className="advanced-options contact-more-options">
-        <summary><ChevronDown size={17} />Ajustar manualmente</summary>
-        <div className="advanced-options-body">
+      {(mode === 'action' || analysis) && (
+        <details className="advanced-options contact-more-options">
+          <summary><ChevronDown size={17} />Ajustar manualmente</summary>
+          <div className="advanced-options-body">
           <div className="form-grid two manual-classification-grid">
             <label>Estado de conversación
               <select value={form.conversation_status} onChange={(e) => update({ conversation_status: e.target.value })}>
@@ -569,6 +614,11 @@ export default function ContactComposer({
             </label>
           ) : (
             <>
+              <FollowupDateField
+                value={form.followup_date}
+                onChange={(value) => update({ followup_date: value })}
+                label="Corregir próximo seguimiento"
+              />
               <label>Próximo paso
                 <input required value={form.next_step} onChange={(e) => update({ next_step: e.target.value })} placeholder="Ej. enviar información y llamar hoy" />
               </label>
@@ -586,14 +636,16 @@ export default function ContactComposer({
               </div>
             </>
           )}
-        </div>
-      </details>
+          </div>
+        </details>
+      )}
 
+      {submitError && <div className="form-error contact-save-error" role="alert">{submitError}</div>}
       <div className="contact-composer-actions field-work-savebar">
         {onCancel && <button type="button" className="button secondary" onClick={onCancel}>Cancelar</button>}
-        <button type="button" className="button primary" onClick={submit} disabled={!valid || saving}>
+        <button type="button" className="button primary" onClick={submit} disabled={!valid || saving || submitting}>
           {mode === 'action' ? <Send size={18} /> : <CheckCircle2 size={18} />}
-          {saving ? 'Guardando…' : submitLabel || 'Guardar y continuar'}
+          {(saving || submitting) ? 'Guardando…' : submitLabel || 'Guardar y continuar'}
         </button>
       </div>
     </div>

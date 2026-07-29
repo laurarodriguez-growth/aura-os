@@ -1,0 +1,12 @@
+FIX ÚNICO — PLAYBOOK PERSONALIZADO POR SETTER
+
+Sube la carpeta aura-os-main respetando las rutas y reemplaza los archivos existentes.
+
+Incluye:
+- Nombre dinámico según el usuario que inició sesión.
+- Personalización tanto en el análisis del backend como en el respaldo local del navegador.
+- Reconocimiento del nombre del setter dentro de TXT exportados de WhatsApp.
+- Eliminación de textos visibles que indicaban que el flujo era exclusivo de Maikol.
+
+El nombre se administra en Configuración > Usuarios > Nombre completo.
+No requiere SQL.
