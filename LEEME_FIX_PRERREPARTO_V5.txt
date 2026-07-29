@@ -1,0 +1,28 @@
+AURA OS · FIX V5 · PRE-REPARTO DE LEADS
+
+Qué cambia
+1. Los leads nuevos sin responsable ya no aparecen en "Mi cola".
+2. En Hoy, el administrador ve el botón "Repartir leads" con el total sin asignar.
+3. El administrador selecciona los setters activos y Aura reparte los leads de forma equilibrada, considerando cuántos nuevos tiene cada setter.
+4. Cada setter ve únicamente los leads asignados a su usuario.
+5. "Toda la operación" queda como vista de supervisión. Un lead asignado a otra persona no muestra acciones de contacto.
+6. El backend impide registrar actividades en leads sin asignar o asignados a otro setter.
+7. Solo el administrador puede cambiar el responsable desde la ficha del lead.
+8. El reparto usa el campo owner_id existente. No requiere SQL.
+
+Archivos del fix
+- backend/app/main.py
+- backend/app/models.py
+- frontend/src/pages/Focus.jsx
+- frontend/src/components/LeadDrawer.jsx
+- frontend/src/styles.css
+
+Cómo usarlo
+1. Subir el contenido de aura-os-main al repositorio conservando las rutas.
+2. Esperar el despliegue del frontend y backend.
+3. Entrar con la cuenta administradora.
+4. Ir a Hoy > Nuevos > Repartir leads.
+5. Seleccionar a Laura, Maikol o los setters que trabajarán la cola.
+6. Presionar Repartir.
+
+No ejecutar SQL para este cambio.

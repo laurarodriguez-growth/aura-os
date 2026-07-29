@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle2, ChevronDown, ExternalLink, Phone, Save, X } from 'lucide-react';
 import { api } from '../lib/api';
+import { useAuth } from '../context/AuthContext';
 import ContactComposer, { conversationLabel } from './ContactComposer';
 import FollowupDateField from './FollowupDateField';
 import OutcomeSelect, { useOutcomes } from './OutcomeSelect';
@@ -61,6 +62,7 @@ function formatFollowupDate(value) {
 }
 
 export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChanged }) {
+  const { profile } = useAuth();
   const [lead, setLead] = useState(null);
   const [form, setForm] = useState({});
   const [baseline, setBaseline] = useState({});
@@ -232,7 +234,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                 <div className="advanced-options-body">
                   <div className="form-grid two classification-primary-grid">
                     <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-                    <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select></label>
+                    <label>Responsable<select value={form.owner_id} disabled={profile?.role !== 'admin'} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select>{profile?.role !== 'admin' && <small className="field-help">Solo un administrador puede reasignar leads.</small>}</label>
                     <label>Estado de conversación
                       <select value={form.conversation_status} onChange={(e) => changeForm({ conversation_status: e.target.value })}>
                         <option value="not_started">No iniciada</option>

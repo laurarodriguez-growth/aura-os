@@ -23,8 +23,8 @@ from .outcomes import (
     suggested_followup_date,
 )
 from .models import (
-    AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, ChatAnalysisRequest, LeadUpdate,
-    ScoringTemplateCreate, SearchJobCreate,
+    AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, ChatAnalysisRequest,
+    FocusAssignmentRequest, LeadUpdate, ScoringTemplateCreate, SearchJobCreate,
 )
 from .scoring import (
     SCORING_CATALOG,
@@ -396,6 +396,32 @@ def _count(builder: Any) -> int:
 def _profile_map() -> dict[str, str]:
     profiles = _fetch_all("profiles", "id,full_name")
     return {str(item["id"]): item.get("full_name") or "Usuario" for item in profiles}
+
+
+def _is_fresh_new_lead(lead: dict[str, Any]) -> bool:
+    return (
+        not lead.get("archived")
+        and not lead.get("excluded_reason")
+        and not lead.get("do_not_contact")
+        and str(lead.get("status") or "") == "Nuevo"
+        and int(lead.get("contact_attempts") or 0) == 0
+        and str(lead.get("conversation_status") or "not_started") == "not_started"
+    )
+
+
+def _assert_lead_work_access(lead: dict[str, Any], user: CurrentUser) -> None:
+    owner_id = str(lead.get("owner_id") or "")
+    if not owner_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Este lead está sin asignar. Debe repartirse antes de registrar una acción.",
+        )
+    if owner_id != user.id:
+        owner_name = _profile_map().get(owner_id, "otro setter")
+        raise HTTPException(
+            status_code=409,
+            detail=f"Este lead está asignado a {owner_name}. Reasígnalo antes de trabajarlo.",
+        )
 
 
 def _base_lead_count_query() -> Any:
@@ -1297,6 +1323,130 @@ def step_search_job(
         raise HTTPException(status_code=500, detail=f"La búsqueda falló: {str(exc)[:300]}") from exc
 
 
+@app.get("/api/focus/assignment")
+def focus_assignment_overview(
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    profiles = [
+        row for row in _fetch_all("profiles", "id,full_name,role,is_active")
+        if row.get("is_active") is not False and str(row.get("role") or "agent") in {"admin", "setter", "agent"}
+    ]
+    leads = _fetch_all("leads")
+    new_leads = [lead for lead in leads if _is_fresh_new_lead(lead)]
+    unassigned = [lead for lead in new_leads if not lead.get("owner_id")]
+
+    assigned_counts: dict[str, int] = {}
+    for lead in new_leads:
+        owner_id = str(lead.get("owner_id") or "")
+        if owner_id:
+            assigned_counts[owner_id] = assigned_counts.get(owner_id, 0) + 1
+
+    setters = [{
+        "id": str(profile.get("id") or ""),
+        "full_name": profile.get("full_name") or "Usuario",
+        "role": profile.get("role") or "agent",
+        "new_leads": assigned_counts.get(str(profile.get("id") or ""), 0),
+    } for profile in profiles if profile.get("id")]
+    setters.sort(key=lambda item: (item["new_leads"], item["full_name"].lower()))
+
+    unassigned.sort(key=lambda item: (
+        int(item.get("final_score") or 0),
+        str(item.get("created_at") or ""),
+    ), reverse=True)
+    preview = [{
+        "id": item.get("id"),
+        "business_name": item.get("business_name") or "Lead sin nombre",
+        "final_tier": item.get("final_tier"),
+        "final_score": item.get("final_score"),
+        "address": item.get("address"),
+    } for item in unassigned[:100]]
+
+    return {
+        "unassigned_count": len(unassigned),
+        "unassigned": preview,
+        "setters": setters,
+        "generated_at": datetime.now(PANAMA_TZ).isoformat(),
+    }
+
+
+@app.post("/api/focus/assignment")
+def distribute_focus_leads(
+    payload: FocusAssignmentRequest,
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    db = get_supabase()
+    requested_setter_ids = list(dict.fromkeys(str(item).strip() for item in payload.setter_ids if str(item).strip()))
+    if not requested_setter_ids:
+        raise HTTPException(status_code=422, detail="Selecciona al menos un setter para repartir los leads")
+
+    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active")
+    profile_map = {
+        str(row.get("id")): row for row in profile_rows
+        if row.get("id") and row.get("is_active") is not False
+    }
+    invalid_setters = [setter_id for setter_id in requested_setter_ids if setter_id not in profile_map]
+    if invalid_setters:
+        raise HTTPException(status_code=422, detail="Uno de los setters seleccionados no está activo")
+
+    all_leads = _fetch_all("leads")
+    candidates = [lead for lead in all_leads if _is_fresh_new_lead(lead) and not lead.get("owner_id")]
+    requested_lead_ids = set(str(item).strip() for item in payload.lead_ids if str(item).strip())
+    if requested_lead_ids:
+        candidates = [lead for lead in candidates if str(lead.get("id") or "") in requested_lead_ids]
+    if not candidates:
+        return {"assigned": 0, "remaining_unassigned": 0, "distribution": []}
+
+    candidates.sort(key=lambda item: (
+        int(item.get("final_score") or 0),
+        str(item.get("created_at") or ""),
+    ), reverse=True)
+
+    current_load = {setter_id: 0 for setter_id in requested_setter_ids}
+    for lead in all_leads:
+        owner_id = str(lead.get("owner_id") or "")
+        if owner_id in current_load and _is_fresh_new_lead(lead):
+            current_load[owner_id] += 1
+
+    order = {setter_id: index for index, setter_id in enumerate(requested_setter_ids)}
+    assigned = 0
+    distribution = {setter_id: 0 for setter_id in requested_setter_ids}
+    for lead in candidates:
+        setter_id = min(requested_setter_ids, key=lambda item: (current_load[item], order[item]))
+        response = (
+            db.table("leads")
+            .update({"owner_id": setter_id, "updated_at": utcnow_iso()})
+            .eq("id", lead.get("id"))
+            .is_("owner_id", "null")
+            .execute()
+        )
+        if not (response.data or []):
+            continue
+        assigned += 1
+        distribution[setter_id] += 1
+        current_load[setter_id] += 1
+        order[setter_id] += len(requested_setter_ids)
+        _log_activity(
+            str(lead.get("id")),
+            user.id,
+            "lead_assigned",
+            f"Lead asignado a {profile_map[setter_id].get('full_name') or 'setter'}",
+            {"owner_id": setter_id, "assigned_by": user.id},
+        )
+
+    remaining = sum(1 for lead in _fetch_all("leads") if _is_fresh_new_lead(lead) and not lead.get("owner_id"))
+    result_distribution = [{
+        "setter_id": setter_id,
+        "setter_name": profile_map[setter_id].get("full_name") or "Usuario",
+        "assigned": distribution[setter_id],
+        "new_total": current_load[setter_id],
+    } for setter_id in requested_setter_ids]
+    return {
+        "assigned": assigned,
+        "remaining_unassigned": remaining,
+        "distribution": result_distribution,
+    }
+
+
 @app.get("/api/focus")
 def aura_focus(
     user: Annotated[CurrentUser, Depends(get_current_user)],
@@ -1309,12 +1459,15 @@ def aura_focus(
     selected_date = work_date or today
     leads = _fetch_all("leads")
     profiles = _profile_map()
+    global_unassigned = sum(1 for lead in leads if _is_fresh_new_lead(lead) and not lead.get("owner_id"))
     all_items: list[dict[str, Any]] = []
 
     for lead in leads:
         owner_id = str(lead.get("owner_id") or "")
         if user.role != "admin" or scope == "mine":
-            if owner_id and owner_id != user.id:
+            # Mi cola muestra únicamente leads preasignados al usuario actual.
+            # Los leads sin responsable se quedan fuera hasta que un admin los reparta.
+            if owner_id != user.id:
                 continue
         enriched = _focus_priority(lead, today)
         if not enriched:
@@ -1395,7 +1548,7 @@ def aura_focus(
         "total": total,
         "overdue": sum(1 for item in all_items if item.get("due_state") == "overdue"),
         "due_today": sum(1 for item in all_items if item.get("due_state") == "today"),
-        "unassigned": sum(1 for item in all_items if not item.get("owner_id")),
+        "unassigned": global_unassigned,
         "new_leads": len(new_items),
         "priorities": len(new_items),
         "active_conversations": len(active_items),
@@ -1553,6 +1706,15 @@ def update_lead(
         raise HTTPException(status_code=404, detail="Lead no encontrado")
 
     changes = payload.model_dump(exclude_unset=True, mode="json")
+    owner_id = str(lead.get("owner_id") or "")
+    if user.role != "admin":
+        if not owner_id:
+            raise HTTPException(status_code=409, detail="Este lead está sin asignar. Debe repartirse antes de editarlo.")
+        if owner_id != user.id:
+            owner_name = _profile_map().get(owner_id, "otro setter")
+            raise HTTPException(status_code=409, detail=f"Este lead está asignado a {owner_name}.")
+        if "owner_id" in changes and str(changes.get("owner_id") or "") != owner_id:
+            raise HTTPException(status_code=403, detail="Solo un administrador puede reasignar leads")
     if "status" in changes and changes["status"] not in STATUSES:
         raise HTTPException(status_code=400, detail="Estado inválido")
     if not changes:
@@ -1634,13 +1796,14 @@ def create_call_log(
     db = get_supabase()
     lead = _first(
         db.table("leads")
-        .select("id,status,first_contact_date,contact_attempts,conversation_status,outcome_stage")
+        .select("id,status,owner_id,first_contact_date,contact_attempts,conversation_status,outcome_stage")
         .eq("id", lead_id)
         .limit(1)
         .execute()
     )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
+    _assert_lead_work_access(lead, user)
 
     occurred_at = payload.occurred_at or datetime.now(timezone.utc)
     outcome_definition = get_outcome_definition(payload.outcome_id, payload.outcome)

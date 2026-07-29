@@ -84,6 +84,12 @@ class LeadUpdate(BaseModel):
     do_not_contact: bool | None = None
 
 
+class FocusAssignmentRequest(BaseModel):
+    setter_ids: list[str] = Field(min_length=1, max_length=50)
+    lead_ids: list[str] = Field(default_factory=list, max_length=1000)
+    strategy: Literal["round_robin"] = "round_robin"
+
+
 class CallLogCreate(BaseModel):
     occurred_at: datetime | None = None
     channel: Literal["Llamada", "WhatsApp", "Instagram", "Email", "Otro"] = "Llamada"

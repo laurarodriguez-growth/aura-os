@@ -3522,3 +3522,213 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   }
   .focus-followup-meta small { max-width: 100%; }
 }
+
+/* Focus v5 · pre-reparto y bloqueo de duplicados */
+.focus-assignment-trigger {
+  min-height: 42px;
+  gap: .48rem;
+  border-color: rgba(var(--accent-rgb), .32);
+  background: rgba(var(--accent-rgb), .09);
+}
+.focus-assignment-trigger strong {
+  display: inline-grid;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 6px;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #071006;
+  font-size: .69rem;
+}
+.focus-assignment-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+.focus-assignment-backdrop {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  border: 0;
+  background: rgba(3, 7, 5, .78);
+  backdrop-filter: blur(7px);
+}
+.focus-assignment-panel {
+  position: relative;
+  z-index: 1;
+  width: min(760px, 100%);
+  max-height: min(860px, calc(100vh - 40px));
+  overflow: auto;
+  padding: 1.15rem;
+  border-color: rgba(var(--accent-rgb), .3);
+  box-shadow: 0 28px 80px rgba(0, 0, 0, .55);
+}
+.focus-assignment-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: .9rem;
+  border-bottom: 1px solid var(--border);
+}
+.focus-assignment-panel > header h2 { margin: .12rem 0 .25rem; font-size: 1.35rem; }
+.focus-assignment-panel > header p:last-child { margin: 0; color: var(--muted); font-size: .76rem; }
+.focus-assignment-loading {
+  min-height: 240px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: .6rem;
+  color: var(--muted);
+}
+.focus-assignment-total {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .1rem .75rem;
+  align-items: center;
+  margin: 1rem 0;
+  padding: .9rem 1rem;
+  border: 1px solid rgba(var(--accent-rgb), .26);
+  border-radius: 14px;
+  background: linear-gradient(135deg, rgba(var(--accent-rgb), .12), rgba(12, 18, 14, .82));
+}
+.focus-assignment-total span { color: var(--muted); font-size: .72rem; }
+.focus-assignment-total strong { grid-row: 1 / 3; grid-column: 2; color: var(--accent); font-size: 2rem; line-height: 1; }
+.focus-assignment-total small { color: var(--text); font-size: .76rem; }
+.focus-assignment-section {
+  margin-top: .9rem;
+  padding: .9rem;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, .012);
+}
+.focus-assignment-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin-bottom: .7rem;
+}
+.focus-assignment-section-title > div { display: grid; gap: .16rem; }
+.focus-assignment-section-title strong { font-size: .82rem; }
+.focus-assignment-section-title small { color: var(--muted); font-size: .66rem; }
+.focus-assignment-section-title button {
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: .68rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.focus-setter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .55rem;
+}
+.focus-setter-option {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 36px 1fr;
+  gap: .6rem;
+  align-items: center;
+  min-height: 62px;
+  padding: .65rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, transform .18s ease;
+}
+.focus-setter-option:hover { transform: translateY(-1px); border-color: rgba(var(--accent-rgb), .35); }
+.focus-setter-option.selected { border-color: rgba(var(--accent-rgb), .52); background: rgba(var(--accent-rgb), .08); }
+.focus-setter-option input { width: 17px; height: 17px; accent-color: var(--accent); }
+.focus-setter-option > span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: rgba(var(--accent-rgb), .1);
+  color: var(--accent);
+}
+.focus-setter-option > div { min-width: 0; display: grid; gap: .14rem; }
+.focus-setter-option strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .76rem; }
+.focus-setter-option small { color: var(--muted); font-size: .62rem; }
+.focus-unassigned-preview { display: grid; gap: .35rem; }
+.focus-unassigned-preview > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  padding: .5rem .6rem;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, .018);
+}
+.focus-unassigned-preview span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .72rem; font-weight: 700; }
+.focus-unassigned-preview small { flex: 0 0 auto; color: var(--muted); font-size: .61rem; }
+.focus-assignment-panel > footer {
+  position: sticky;
+  bottom: -1.15rem;
+  display: flex;
+  justify-content: flex-end;
+  gap: .6rem;
+  margin: 1rem -1.15rem -1.15rem;
+  padding: .9rem 1.15rem;
+  border-top: 1px solid var(--border);
+  background: rgba(10, 15, 12, .96);
+  backdrop-filter: blur(10px);
+}
+.focus-owner-lock {
+  display: flex;
+  align-items: center;
+  gap: .7rem;
+  margin: .75rem 0;
+  padding: .7rem .8rem;
+  border: 1px solid rgba(255, 186, 71, .28);
+  border-radius: 12px;
+  background: rgba(255, 186, 71, .07);
+  color: #ffd37d;
+}
+.focus-owner-lock > div { flex: 1; min-width: 0; display: grid; gap: .12rem; }
+.focus-owner-lock strong { font-size: .74rem; }
+.focus-owner-lock span { color: var(--muted); font-size: .66rem; }
+.focus-owner-lock button {
+  border: 0;
+  background: transparent;
+  color: #ffd37d;
+  font-size: .66rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+.focus-supervision-message {
+  margin: .75rem 0;
+  padding: .75rem;
+  border: 1px dashed rgba(255, 186, 71, .28);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: .7rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 720px) {
+  .focus-assignment-layer { align-items: end; padding: 0; }
+  .focus-assignment-panel {
+    width: 100%;
+    max-height: 92vh;
+    border-radius: 20px 20px 0 0;
+    padding: .9rem;
+  }
+  .focus-setter-grid { grid-template-columns: 1fr; }
+  .focus-assignment-section-title { align-items: flex-start; }
+  .focus-assignment-panel > footer {
+    bottom: -.9rem;
+    margin: .9rem -.9rem -.9rem;
+    padding: .8rem .9rem calc(.8rem + env(safe-area-inset-bottom));
+  }
+  .focus-assignment-panel > footer .button { flex: 1; }
+  .focus-owner-lock { align-items: flex-start; flex-wrap: wrap; }
+  .focus-owner-lock button { width: 100%; text-align: left; padding-left: 26px; }
+}

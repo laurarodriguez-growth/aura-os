@@ -15,6 +15,9 @@ import {
   Search,
   Sparkles,
   Target,
+  UserCheck,
+  UsersRound,
+  X,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
@@ -90,6 +93,11 @@ export default function Focus() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [showAssignment, setShowAssignment] = useState(false);
+  const [assignment, setAssignment] = useState({ unassigned_count: 0, unassigned: [], setters: [] });
+  const [selectedSetters, setSelectedSetters] = useState([]);
+  const [assignmentLoading, setAssignmentLoading] = useState(false);
+  const [assignmentSaving, setAssignmentSaving] = useState(false);
 
   const load = async (nextScope = scope, nextBucket = bucket, nextFollowupDate = followupDate) => {
     setLoading(true);
@@ -152,6 +160,64 @@ export default function Focus() {
       lead.owner_name,
     ].some((value) => String(value || '').toLocaleLowerCase('es').includes(term)));
   }, [queue, followupSearch]);
+
+  const currentOwnerId = String(current?.owner_id || '');
+  const canWorkCurrent = Boolean(current && currentOwnerId && currentOwnerId === String(profile?.id || ''));
+  const supervisionOnly = Boolean(current && !canWorkCurrent);
+
+  const openAssignment = async () => {
+    setShowAssignment(true);
+    setAssignmentLoading(true);
+    setError('');
+    try {
+      const data = await api('/api/focus/assignment');
+      setAssignment(data);
+      setSelectedSetters((current) => {
+        const activeIds = new Set((data.setters || []).map((item) => item.id));
+        const preserved = current.filter((id) => activeIds.has(id));
+        return preserved.length ? preserved : (data.setters || []).map((item) => item.id);
+      });
+    } catch (e) {
+      setError(e.message);
+      setShowAssignment(false);
+    } finally {
+      setAssignmentLoading(false);
+    }
+  };
+
+  const toggleSetter = (setterId) => {
+    setSelectedSetters((current) => current.includes(setterId)
+      ? current.filter((id) => id !== setterId)
+      : [...current, setterId]);
+  };
+
+  const distributeLeads = async () => {
+    if (!selectedSetters.length) {
+      setError('Selecciona al menos un setter para repartir los leads.');
+      return;
+    }
+    setAssignmentSaving(true);
+    setError('');
+    try {
+      const result = await api('/api/focus/assignment', {
+        method: 'POST',
+        body: JSON.stringify({ setter_ids: selectedSetters, strategy: 'round_robin' }),
+      });
+      const detail = (result.distribution || [])
+        .filter((item) => item.assigned > 0)
+        .map((item) => `${item.setter_name}: ${item.assigned}`)
+        .join(' · ');
+      setSuccess(`${result.assigned} leads repartidos${detail ? ` · ${detail}` : ''}.`);
+      const refreshed = await api('/api/focus/assignment');
+      setAssignment(refreshed);
+      if (!refreshed.unassigned_count) setShowAssignment(false);
+      await load(scope, bucket, followupDate);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setAssignmentSaving(false);
+    }
+  };
 
   const changeScope = (value) => {
     setScope(value);
@@ -337,6 +403,12 @@ export default function Focus() {
         actions={(
           <>
             {profile?.role === 'admin' && (
+              <button type="button" className="button focus-assignment-trigger" onClick={openAssignment}>
+                <UsersRound size={17} />Repartir leads
+                <strong>{summary.unassigned || 0}</strong>
+              </button>
+            )}
+            {profile?.role === 'admin' && (
               <div className="focus-scope-switch" aria-label="Alcance de la cola">
                 <button className={scope === 'mine' ? 'active' : ''} onClick={() => changeScope('mine')}>Mi cola</button>
                 <button className={scope === 'all' ? 'active' : ''} onClick={() => changeScope('all')}>Toda la operación</button>
@@ -346,6 +418,65 @@ export default function Focus() {
           </>
         )}
       />
+
+      {showAssignment && (
+        <div className="focus-assignment-layer" role="dialog" aria-modal="true" aria-label="Repartir leads nuevos">
+          <button type="button" className="focus-assignment-backdrop" onClick={() => !assignmentSaving && setShowAssignment(false)} aria-label="Cerrar reparto" />
+          <aside className="panel focus-assignment-panel">
+            <header>
+              <div><p className="eyebrow">PRE-REPARTO</p><h2>Repartir leads nuevos</h2><p>Los leads no aparecen en la cola de trabajo hasta tener un responsable.</p></div>
+              <button type="button" className="icon-button" onClick={() => setShowAssignment(false)} disabled={assignmentSaving}><X size={20} /></button>
+            </header>
+
+            {assignmentLoading ? (
+              <div className="focus-assignment-loading"><Sparkles size={19} />Preparando el reparto…</div>
+            ) : (
+              <>
+                <div className="focus-assignment-total">
+                  <span>Sin asignar</span><strong>{assignment.unassigned_count || 0}</strong><small>leads nuevos listos para repartir</small>
+                </div>
+
+                <section className="focus-assignment-section">
+                  <div className="focus-assignment-section-title">
+                    <div><strong>¿Quiénes trabajarán esta cola?</strong><small>El reparto equilibra la cantidad actual de nuevos.</small></div>
+                    <button type="button" onClick={() => setSelectedSetters((assignment.setters || []).map((item) => item.id))}>Seleccionar todos</button>
+                  </div>
+                  <div className="focus-setter-grid">
+                    {(assignment.setters || []).map((setter) => {
+                      const checked = selectedSetters.includes(setter.id);
+                      return (
+                        <label key={setter.id} className={`focus-setter-option ${checked ? 'selected' : ''}`}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleSetter(setter.id)} />
+                          <span><UserCheck size={18} /></span>
+                          <div><strong>{setter.full_name}</strong><small>{setter.new_leads || 0} nuevos asignados ahora</small></div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                {!!assignment.unassigned?.length && (
+                  <section className="focus-assignment-section preview">
+                    <div className="focus-assignment-section-title"><div><strong>Primeros leads del reparto</strong><small>Se ordenan por score para mezclarlos de forma equilibrada.</small></div></div>
+                    <div className="focus-unassigned-preview">
+                      {assignment.unassigned.slice(0, 8).map((lead) => (
+                        <div key={lead.id}><span>{lead.business_name}</span><small>Tier {lead.final_tier || '—'} · {lead.final_score || 0} pts</small></div>
+                      ))}
+                    </div>
+                  </section>
+                )}
+
+                <footer>
+                  <button type="button" className="button secondary" onClick={() => setShowAssignment(false)} disabled={assignmentSaving}>Cancelar</button>
+                  <button type="button" className="button primary" onClick={distributeLeads} disabled={assignmentSaving || !assignment.unassigned_count || !selectedSetters.length}>
+                    <UsersRound size={18} />{assignmentSaving ? 'Repartiendo…' : `Repartir ${assignment.unassigned_count || 0} leads`}
+                  </button>
+                </footer>
+              </>
+            )}
+          </aside>
+        </div>
+      )}
 
       <nav className="focus-bucket-tabs" aria-label="Bandejas de Focus">
         {bucketOptions.map(([value, label]) => (
@@ -388,7 +519,15 @@ export default function Focus() {
         renderFollowups()
       ) : !current ? (
         <section className="panel focus-empty">
-          <EmptyState title="Esta bandeja está al día" text="No hay otro lead en esta vista. Cambia de bandeja o actualiza la cola." />
+          <EmptyState
+            title={profile?.role === 'admin' && bucket === 'new' && summary.unassigned ? 'Primero reparte los leads nuevos' : 'Esta bandeja está al día'}
+            text={profile?.role === 'admin' && bucket === 'new' && summary.unassigned
+              ? `${summary.unassigned} leads están sin responsable y todavía no pertenecen a ninguna cola.`
+              : 'No hay otro lead en esta vista. Cambia de bandeja o actualiza la cola.'}
+          />
+          {profile?.role === 'admin' && bucket === 'new' && summary.unassigned > 0 && (
+            <button className="button primary" onClick={openAssignment}><UsersRound size={16} />Repartir ahora</button>
+          )}
           <button className="button primary" onClick={() => load()}><RotateCcw size={16} />Revisar nuevamente</button>
         </section>
       ) : (
@@ -404,6 +543,14 @@ export default function Focus() {
                 <span>Momentum</span><strong>{current.priority_score}</strong><small>{current.priority_level}</small>
               </div>
             </header>
+
+            {supervisionOnly && (
+              <div className="focus-owner-lock">
+                <UsersRound size={18} />
+                <div><strong>Solo supervisión</strong><span>{currentOwnerId ? `Este lead está asignado a ${current.owner_name || 'otro setter'}.` : 'Este lead todavía está sin asignar.'}</span></div>
+                {profile?.role === 'admin' && <button type="button" onClick={openAssignment}>Abrir reparto</button>}
+              </div>
+            )}
 
             <div className="conversation-state-banner">
               <MessageCircle size={18} />
@@ -430,24 +577,30 @@ export default function Focus() {
 
             <div className="focus-reasons">{focusReasons.map((reason) => <span key={reason}>{reason}</span>)}</div>
 
-            <div className="focus-primary-actions async-actions">
-              {current.phone && <a className="focus-action call" href={`tel:${current.phone}`}><Phone size={21} /><span>Llamar ahora</span><small>{current.phone}</small></a>}
-              {wa && <a className="focus-action whatsapp" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={21} /><span>Abrir WhatsApp</span><small>Contactar por mensaje</small></a>}
-              <button className="focus-action log" onClick={() => openLog('action')}><ArrowRight size={21} /><span>Registrar envío</span><small>{bucket === 'new' ? 'Guardar y mover a Esperando' : 'Guardar y actualizar el seguimiento'}</small></button>
-              <button className="focus-action response" onClick={() => openLog('response')}><MessageCircle size={21} /><span>Registrar respuesta</span><small>Analizar y mover a Conversaciones activas</small></button>
-            </div>
+            {canWorkCurrent ? (
+              <div className="focus-primary-actions async-actions">
+                {current.phone && <a className="focus-action call" href={`tel:${current.phone}`}><Phone size={21} /><span>Llamar ahora</span><small>{current.phone}</small></a>}
+                {wa && <a className="focus-action whatsapp" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={21} /><span>Abrir WhatsApp</span><small>Contactar por mensaje</small></a>}
+                <button className="focus-action log" onClick={() => openLog('action')}><ArrowRight size={21} /><span>Registrar envío</span><small>{bucket === 'new' ? 'Guardar y mover a Esperando' : 'Guardar y actualizar el seguimiento'}</small></button>
+                <button className="focus-action response" onClick={() => openLog('response')}><MessageCircle size={21} /><span>Registrar respuesta</span><small>Analizar y mover a Conversaciones activas</small></button>
+              </div>
+            ) : (
+              <div className="focus-supervision-message">Este lead no puede trabajarse desde tu cola. Reasígnalo primero para evitar contactos duplicados.</div>
+            )}
 
             <div className="focus-secondary-actions">
               <button onClick={() => setSelected(current.id)}><ExternalLink size={15} />Ver ficha completa</button>
               <button onClick={rotate}><ArrowRight size={15} />Saltar por ahora</button>
             </div>
 
-            <div className="focus-postpone">
-              <span><AlarmClock size={16} />Posponer:</span>
-              <button disabled={saving} onClick={() => postpone(1)}>Mañana</button>
-              <button disabled={saving} onClick={() => postpone(3)}>3 días</button>
-              <button disabled={saving} onClick={() => postpone(7)}>7 días</button>
-            </div>
+            {canWorkCurrent && (
+              <div className="focus-postpone">
+                <span><AlarmClock size={16} />Posponer:</span>
+                <button disabled={saving} onClick={() => postpone(1)}>Mañana</button>
+                <button disabled={saving} onClick={() => postpone(3)}>3 días</button>
+                <button disabled={saving} onClick={() => postpone(7)}>7 días</button>
+              </div>
+            )}
           </article>
 
           {showLog && (
