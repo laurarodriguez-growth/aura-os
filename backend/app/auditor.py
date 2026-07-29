@@ -37,6 +37,17 @@ SERVICE_PATTERNS = {
         "Estética dental": ("estética dental", "estetica dental", "carillas", "blanqueamiento"),
         "Rehabilitación oral": ("rehabilitación oral", "rehabilitacion oral", "prótesis dental", "protesis dental"),
         "Endodoncia": ("endodoncia", "tratamiento de conducto"),
+        "Odontopediatría": (
+            "odontopediatría",
+            "odontopediatria",
+            "odontología pediátrica",
+            "odontologia pediatrica",
+            "dentista pediátrico",
+            "dentista pediatrico",
+            "dentista infantil",
+            "pediatric dentist",
+            "pediatric dentistry",
+        ),
     },
     "Medicina estética": {
         "Botox": ("botox", "toxina botulínica", "toxina botulinica"),

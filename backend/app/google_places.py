@@ -61,12 +61,12 @@ def _cache_key(payload: dict[str, Any]) -> str:
 
 def build_queries(niche: str, city: str, zones: list[str], services: list[str]) -> list[str]:
     base_terms = (
-        ["clínica dental", "dentista", "odontología"]
+        ["clínica dental", "odontopediatría", "dentista", "odontología"]
         if niche == "Dental"
         else ["clínica de medicina estética", "centro de estética médica", "medicina estética"]
     )
     default_services = (
-        ["implantes dentales", "ortodoncia", "diseño de sonrisa", "estética dental"]
+        ["implantes dentales", "ortodoncia", "odontopediatría", "diseño de sonrisa", "estética dental"]
         if niche == "Dental"
         else ["botox", "ácido hialurónico", "tratamientos láser", "rejuvenecimiento facial"]
     )
@@ -105,7 +105,19 @@ def is_hard_excluded(place: dict[str, Any], niche: str) -> str | None:
             return f"Exclusión por término: {term}"
     if place.get("businessStatus") == "CLOSED_PERMANENTLY":
         return "Negocio cerrado permanentemente"
-    if niche == "Dental" and not any(term in combined for term in ("dental", "dentist", "odont", "orthodont")):
+    if niche == "Dental" and not any(
+        term in combined
+        for term in (
+            "dental",
+            "dentist",
+            "odont",
+            "orthodont",
+            "pediatric dentist",
+            "pediatric dentistry",
+            "dentista pediátrico",
+            "dentista pediatrico",
+        )
+    ):
         return "No parece ser una clínica dental"
     if niche == "Medicina estética" and not any(term in combined for term in ("estét", "estet", "aesthetic", "beauty", "dermat", "medical_spa", "spa")):
         return "No parece ser medicina estética"
