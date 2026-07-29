@@ -17,7 +17,6 @@ from .db import get_supabase
 from .diagnose import router as diagnose_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
-from .public_intake import router as public_intake_router
 from .outcomes import (
     derive_outcome_stage, get_outcome_definition, router as outcomes_router,
     suggested_followup_date,
@@ -48,7 +47,6 @@ app.add_middleware(
 )
 
 app.include_router(diagnose_router)
-app.include_router(public_intake_router)
 app.include_router(outcomes_router)
 
 
@@ -1720,60 +1718,257 @@ def dashboard(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     date_from: date | None = None,
     date_to: date | None = None,
+    agent_id: str | None = None,
+    status: str | None = None,
+    tier: str | None = None,
+    outcome: str | None = None,
 ) -> dict[str, Any]:
+    """Panel de Rendimiento con métricas, filtros y detalle reutilizable.
+
+    No depende de tablas nuevas: consolida leads, call_logs y profiles para que
+    las tarjetas, el pipeline y el drill-down partan del mismo universo.
+    """
+    if date_from and date_to and date_from > date_to:
+        raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la fecha final.")
+
     db = get_supabase()
-    total = _count(
-        db.table("leads").select("id", count="exact").eq("archived", False).is_("excluded_reason", "null")
-    )
-    tier_a = _count(
-        db.table("leads").select("id", count="exact").eq("archived", False).is_("excluded_reason", "null").eq("final_tier", "A")
-    )
-    tier_b = _count(
-        db.table("leads").select("id", count="exact").eq("archived", False).is_("excluded_reason", "null").eq("final_tier", "B")
-    )
-    due = _count(
-        db.table("leads").select("id", count="exact").eq("archived", False).lte("next_followup_date", date.today().isoformat())
-        .not_.in_("status", ["Descartado", "No interesado", "No califica", "Implementación vendida"])
-    )
-    status_counts: dict[str, int] = {}
-    for status_name in STATUSES:
-        status_counts[status_name] = _count(
-            db.table("leads").select("id", count="exact").eq("archived", False).eq("status", status_name)
+    today = panama_today()
+    profiles = _fetch_all("profiles", "id,full_name,role")
+    profile_names = {str(item.get("id")): item.get("full_name") or "Usuario" for item in profiles}
+
+    raw_leads = _fetch_all("leads")
+    active_leads = [
+        item for item in raw_leads
+        if not item.get("archived") and not item.get("excluded_reason")
+    ]
+
+    def local_date(value: Any) -> date | None:
+        parsed = _parse_datetime(value)
+        if parsed:
+            return parsed.astimezone(PANAMA_TZ).date()
+        return _parse_date(value)
+
+    def within_period(value: Any) -> bool:
+        item_date = local_date(value)
+        if not item_date:
+            return not date_from and not date_to
+        if date_from and item_date < date_from:
+            return False
+        if date_to and item_date > date_to:
+            return False
+        return True
+
+    # Filtros de cartera. El periodo se aplica a la fecha de captura para
+    # "Leads guardados" y a occurred_at para las métricas de actividad.
+    portfolio_leads = active_leads
+    if agent_id:
+        portfolio_leads = [item for item in portfolio_leads if str(item.get("owner_id") or "") == agent_id]
+    if status:
+        portfolio_leads = [item for item in portfolio_leads if str(item.get("status") or "") == status]
+    if tier:
+        portfolio_leads = [item for item in portfolio_leads if str(item.get("final_tier") or "") == tier]
+    if outcome:
+        portfolio_leads = [item for item in portfolio_leads if str(item.get("outcome") or "") == outcome]
+
+    saved_leads = [item for item in portfolio_leads if within_period(item.get("capture_date") or item.get("created_at"))]
+    portfolio_ids = {str(item.get("id")) for item in portfolio_leads if item.get("id")}
+    lead_map = {str(item.get("id")): item for item in active_leads if item.get("id")}
+
+    raw_calls = _fetch_all("call_logs")
+    calls = []
+    for item in raw_calls:
+        lead_id = str(item.get("lead_id") or "")
+        if lead_id not in portfolio_ids:
+            continue
+        if agent_id and str(item.get("agent_id") or "") != agent_id:
+            continue
+        if not within_period(item.get("occurred_at")):
+            continue
+        calls.append(item)
+    calls.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+
+    non_contact = {"No respondió", "Buzón de voz", "Número incorrecto", "Pendiente"}
+
+    def is_connected(item: dict[str, Any]) -> bool:
+        return bool(
+            item.get("direction") == "Entrante"
+            or item.get("activity_type") == "response_received"
+            or str(item.get("outcome") or "") not in non_contact
         )
 
-    call_query = db.table("call_logs").select("*").order("occurred_at", desc=True).limit(5000)
-    if date_from:
-        call_query = call_query.gte("occurred_at", f"{date_from.isoformat()}T00:00:00Z")
-    if date_to:
-        call_query = call_query.lte("occurred_at", f"{date_to.isoformat()}T23:59:59Z")
-    calls = call_query.execute().data or []
-    non_contact = {"No respondió", "Buzón de voz", "Número incorrecto", "Pendiente"}
-    connected = sum(
-        1 for item in calls
-        if item.get("direction") == "Entrante"
-        or item.get("activity_type") == "response_received"
-        or item.get("outcome") not in non_contact
-    )
-    meetings = sum(1 for item in calls if item.get("appointment_booked") or item.get("outcome") == "Reunión agendada")
-    sales = sum(1 for item in calls if item.get("outcome") == "Venta" or float(item.get("sale_amount") or 0) > 0)
-    revenue = sum(float(item.get("sale_amount") or 0) for item in calls)
-    worked_leads = len({item.get("lead_id") for item in calls if item.get("lead_id")})
+    def lead_summary(item: dict[str, Any]) -> dict[str, Any]:
+        owner_id = str(item.get("owner_id") or "")
+        return {
+            "lead_id": item.get("id"),
+            "business_name": item.get("business_name") or "Lead sin nombre",
+            "zone": item.get("zone") or item.get("address"),
+            "status": item.get("status") or "Nuevo",
+            "tier": item.get("final_tier") or "Descartar",
+            "score": int(item.get("final_score") or 0),
+            "outcome": item.get("outcome"),
+            "owner_id": item.get("owner_id"),
+            "owner_name": profile_names.get(owner_id, "Sin asignar"),
+            "next_followup_date": item.get("next_followup_date"),
+            "last_activity_at": item.get("last_contact_date"),
+            "contact_attempts": int(item.get("contact_attempts") or 0),
+            "capture_date": item.get("capture_date") or item.get("created_at"),
+        }
 
+    call_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in calls:
+        lead_id = str(item.get("lead_id") or "")
+        call_groups.setdefault(lead_id, []).append(item)
+
+    worked_rows: list[dict[str, Any]] = []
+    contact_rows: list[dict[str, Any]] = []
+    for lead_id, items in call_groups.items():
+        lead = lead_map.get(lead_id)
+        if not lead:
+            continue
+        summary = lead_summary(lead)
+        latest = items[0]
+        connected_for_lead = any(is_connected(item) for item in items)
+        worked_rows.append({
+            **summary,
+            "activity_count": len(items),
+            "last_activity_at": latest.get("occurred_at"),
+            "channel": latest.get("channel"),
+            "outcome": latest.get("outcome") or summary.get("outcome"),
+            "agent_name": profile_names.get(str(latest.get("agent_id") or ""), "Usuario"),
+        })
+        contact_rows.append({
+            **summary,
+            "activity_count": len(items),
+            "last_activity_at": latest.get("occurred_at"),
+            "channel": latest.get("channel"),
+            "outcome": latest.get("outcome") or summary.get("outcome"),
+            "agent_name": profile_names.get(str(latest.get("agent_id") or ""), "Usuario"),
+            "contacted": connected_for_lead,
+        })
+
+    worked_rows.sort(key=lambda item: str(item.get("last_activity_at") or ""), reverse=True)
+    contact_rows.sort(key=lambda item: (bool(item.get("contacted")), str(item.get("last_activity_at") or "")), reverse=True)
+
+    overdue_leads = []
+    for item in portfolio_leads:
+        followup = _parse_date(item.get("next_followup_date"))
+        if not followup or followup > today:
+            continue
+        if str(item.get("status") or "") in CLOSED_STATUSES:
+            continue
+        overdue_leads.append({
+            **lead_summary(item),
+            "days_overdue": max(0, (today - followup).days),
+        })
+    overdue_leads.sort(key=lambda item: str(item.get("next_followup_date") or ""))
+
+    meeting_calls = [
+        item for item in calls
+        if item.get("appointment_booked") or str(item.get("outcome") or "") == "Reunión agendada"
+    ]
+    sale_calls = [
+        item for item in calls
+        if str(item.get("outcome") or "") == "Venta" or float(item.get("sale_amount") or 0) > 0
+    ]
+
+    def call_detail(item: dict[str, Any]) -> dict[str, Any]:
+        lead = lead_map.get(str(item.get("lead_id") or ""), {})
+        summary = lead_summary(lead) if lead else {
+            "lead_id": item.get("lead_id"),
+            "business_name": "Lead no disponible",
+            "status": "—",
+            "tier": "—",
+            "owner_name": "Sin asignar",
+            "next_followup_date": None,
+        }
+        return {
+            **summary,
+            "activity_id": item.get("id"),
+            "occurred_at": item.get("occurred_at"),
+            "last_activity_at": item.get("occurred_at"),
+            "channel": item.get("channel"),
+            "outcome": item.get("outcome"),
+            "notes": item.get("notes") or item.get("next_step"),
+            "appointment_booked": bool(item.get("appointment_booked")),
+            "sale_amount": float(item.get("sale_amount") or 0),
+            "agent_name": profile_names.get(str(item.get("agent_id") or ""), "Usuario"),
+            "contacted": is_connected(item),
+        }
+
+    connected = sum(1 for item in contact_rows if item.get("contacted"))
+    meeting_leads = {str(item.get("lead_id") or "") for item in meeting_calls if item.get("lead_id")}
+    revenue = sum(float(item.get("sale_amount") or 0) for item in sale_calls)
+
+    status_counts: dict[str, int] = {name: 0 for name in STATUSES}
+    for item in saved_leads:
+        item_status = str(item.get("status") or "Nuevo")
+        status_counts[item_status] = status_counts.get(item_status, 0) + 1
+
+    activity_by_day: list[dict[str, Any]] = []
+    period_end = date_to or today
+    period_start = date_from or (period_end - timedelta(days=6))
+    if (period_end - period_start).days > 30:
+        period_start = period_end - timedelta(days=29)
+    call_days: dict[str, int] = {}
+    for item in calls:
+        item_date = local_date(item.get("occurred_at"))
+        if item_date:
+            key = item_date.isoformat()
+            call_days[key] = call_days.get(key, 0) + 1
+    cursor = period_start
+    while cursor <= period_end:
+        activity_by_day.append({"date": cursor.isoformat(), "count": call_days.get(cursor.isoformat(), 0)})
+        cursor += timedelta(days=1)
+
+    recent_calls = [call_detail(item) for item in calls[:20]]
+    saved_rows = [lead_summary(item) for item in saved_leads]
+    saved_rows.sort(key=lambda item: str(item.get("capture_date") or ""), reverse=True)
+
+    distinct_statuses = sorted({str(item.get("status") or "") for item in active_leads if item.get("status")})
+    distinct_tiers = [name for name in ["A", "B", "C", "Descartar"] if any(str(item.get("final_tier") or "") == name for item in active_leads)]
+    distinct_outcomes = sorted({str(item.get("outcome") or "") for item in active_leads if item.get("outcome")})
+
+    detail_limit = 250
     return {
-        "total_leads": total,
-        "tier_a": tier_a,
-        "tier_b": tier_b,
-        "followups_due": due,
-        "worked_leads": worked_leads,
+        "generated_at": utcnow_iso(),
+        "total_leads": len(saved_leads),
+        "portfolio_total": len(saved_leads),
+        "tier_a": sum(1 for item in saved_leads if item.get("final_tier") == "A"),
+        "tier_b": sum(1 for item in saved_leads if item.get("final_tier") == "B"),
+        "followups_due": len(overdue_leads),
+        "worked_leads": len(worked_rows),
         "contact_activities": len(calls),
         "connected": connected,
-        "meetings": meetings,
-        "sales": sales,
+        "meetings": len(meeting_calls),
+        "sales": len(sale_calls),
         "revenue": revenue,
-        "contact_rate": round((connected / len(calls) * 100), 1) if calls else 0,
-        "meeting_rate": round((meetings / worked_leads * 100), 1) if worked_leads else 0,
+        "contact_rate": round((connected / len(contact_rows) * 100), 1) if contact_rows else 0,
+        "meeting_rate": round((len(meeting_leads) / len(worked_rows) * 100), 1) if worked_rows else 0,
         "status_counts": status_counts,
-        "recent_calls": calls[:10],
+        "activity_by_day": activity_by_day,
+        "recent_calls": recent_calls,
+        "details": {
+            "saved": saved_rows[:detail_limit],
+            "worked": worked_rows[:detail_limit],
+            "overdue": overdue_leads[:detail_limit],
+            "contacts": contact_rows[:detail_limit],
+            "meetings": [call_detail(item) for item in meeting_calls[:detail_limit]],
+            "sales": [call_detail(item) for item in sale_calls[:detail_limit]],
+        },
+        "detail_totals": {
+            "saved": len(saved_rows),
+            "worked": len(worked_rows),
+            "overdue": len(overdue_leads),
+            "contacts": len(contact_rows),
+            "meetings": len(meeting_calls),
+            "sales": len(sale_calls),
+        },
+        "filter_options": {
+            "profiles": profiles,
+            "statuses": distinct_statuses or STATUSES,
+            "tiers": distinct_tiers or ["A", "B", "C", "Descartar"],
+            "outcomes": distinct_outcomes,
+        },
     }
 
 
