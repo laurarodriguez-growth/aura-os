@@ -1552,7 +1552,9 @@ def create_call_log(
     if not followup_date:
         followup_date = suggested_followup_date(outcome_definition, panama_today())
 
-    commercial_status = outcome_definition.get("recommended_commercial_status") if outcome_definition else None
+    commercial_status = outcome_definition.get("recommended_commercial_status") if outcome_definition else payload.commercial_status
+    if commercial_status not in STATUSES:
+        commercial_status = None
     outcome_stage = derive_outcome_stage(conversation_status, outcome_definition, followup_date, commercial_status or lead.get("status"))
     final_outcome = outcome_stage == "final"
 
@@ -1562,6 +1564,8 @@ def create_call_log(
         response_due_at = _default_response_due(payload.channel, occurred_at)
 
     row = payload.model_dump(mode="json")
+    # commercial_status guía la actualización del lead, pero no es una columna de call_logs.
+    row.pop("commercial_status", None)
     row.update({
         "lead_id": lead_id,
         "agent_id": user.id,

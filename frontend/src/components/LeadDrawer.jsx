@@ -48,6 +48,18 @@ function localISODate(daysFromToday = 0) {
   return `${year}-${month}-${day}`;
 }
 
+function formatFollowupDate(value) {
+  if (!value) return 'Sin seguimiento';
+  const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return value;
+  const date = new Date(year, month - 1, day);
+  const todayISO = localISODate(0);
+  const tomorrowISO = localISODate(1);
+  if (String(value).slice(0, 10) === todayISO) return 'Hoy';
+  if (String(value).slice(0, 10) === tomorrowISO) return 'Mañana';
+  return date.toLocaleDateString('es-PA', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
 export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChanged }) {
   const [lead, setLead] = useState(null);
   const [form, setForm] = useState({});
@@ -177,7 +189,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
         </div>
 
         <nav className="drawer-tabs">
-          <button className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}>Clasificación</button>
+          <button className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}>Resumen</button>
           <button className={tab === 'contact' ? 'active' : ''} onClick={() => setTab('contact')}>Registrar actividad</button>
           <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>Historial</button>
         </nav>
@@ -193,38 +205,52 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
               </div>
 
               <section className="classification-essential-fields">
-                <div className="conversation-profile-card two-cards">
+                <div className="automatic-classification-heading">
+                  <span><CheckCircle2 size={17} /></span>
+                  <div>
+                    <strong>Clasificación automática</strong>
+                    <small>Aura actualiza estos datos cuando Maikol guarda una actividad o una respuesta.</small>
+                  </div>
+                </div>
+
+                <div className="conversation-profile-card automatic-summary-grid">
+                  <div><small>Estado comercial</small><strong>{form.status || 'Nuevo'}</strong></div>
                   <div><small>Estado de conversación</small><strong>{conversationLabel(form.conversation_status)}</strong></div>
                   <div><small>Outcome</small><strong>{form.outcome || 'Pendiente'}</strong></div>
+                  <div><small>Próximo seguimiento</small><strong>{formatFollowupDate(form.next_followup_date)}</strong></div>
                 </div>
-
-                <div className="form-grid two classification-primary-grid">
-                  <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-                  <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select></label>
-                  <label>Estado de conversación
-                    <select value={form.conversation_status} onChange={(e) => changeForm({ conversation_status: e.target.value })}>
-                      <option value="not_started">No iniciada</option>
-                      <option value="waiting_response">Esperando respuesta</option>
-                      <option value="response_received">Respuesta recibida</option>
-                      <option value="conversation_active">Conversación activa</option>
-                      <option value="waiting_decision_maker">Esperando al decisor</option>
-                      <option value="waiting_confirmation">Esperando confirmación</option>
-                      <option value="followup_scheduled">Seguimiento programado</option>
-                      <option value="closed">Cerrada</option>
-                    </select>
-                  </label>
-                  <OutcomeSelect
-                    outcomes={outcomes}
-                    value={form.outcome_id}
-                    fallbackName={form.outcome}
-                    onChange={applyOutcome}
-                    disabled={outcomesLoading}
-                    label="Outcome · qué pasó"
-                  />
-                </div>
-
-                <FollowupDateField value={form.next_followup_date} onChange={(value) => changeForm({ next_followup_date: value })} />
               </section>
+
+              <details className="advanced-options manual-classification-options">
+                <summary><ChevronDown size={17} />Corregir clasificación manualmente</summary>
+                <div className="advanced-options-body">
+                  <div className="form-grid two classification-primary-grid">
+                    <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+                    <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select></label>
+                    <label>Estado de conversación
+                      <select value={form.conversation_status} onChange={(e) => changeForm({ conversation_status: e.target.value })}>
+                        <option value="not_started">No iniciada</option>
+                        <option value="waiting_response">Esperando respuesta</option>
+                        <option value="response_received">Respuesta recibida</option>
+                        <option value="conversation_active">Conversación activa</option>
+                        <option value="waiting_decision_maker">Esperando al decisor</option>
+                        <option value="waiting_confirmation">Esperando confirmación</option>
+                        <option value="followup_scheduled">Seguimiento programado</option>
+                        <option value="closed">Cerrada</option>
+                      </select>
+                    </label>
+                    <OutcomeSelect
+                      outcomes={outcomes}
+                      value={form.outcome_id}
+                      fallbackName={form.outcome}
+                      onChange={applyOutcome}
+                      disabled={outcomesLoading}
+                      label="Outcome · qué pasó"
+                    />
+                  </div>
+                  <FollowupDateField value={form.next_followup_date} onChange={(value) => changeForm({ next_followup_date: value })} />
+                </div>
+              </details>
 
               <details className="advanced-options lead-more-options">
                 <summary><ChevronDown size={17} />Más opciones</summary>
@@ -245,11 +271,16 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                 </div>
               </details>
 
-              <div className="drawer-sticky-savebar">
-                <button className={`button full ${dirty ? 'primary' : 'save-idle'}`} onClick={save} disabled={saving || !dirty}>
-                  {saved && !dirty ? <CheckCircle2 size={17} /> : <Save size={17} />}{saveLabel}
-                </button>
-              </div>
+              {dirty && (
+                <div className="drawer-sticky-savebar">
+                  <button className="button full primary" onClick={save} disabled={saving}>
+                    <Save size={17} />{saveLabel}
+                  </button>
+                </div>
+              )}
+              {saved && !dirty && (
+                <div className="drawer-save-confirmation" role="status"><CheckCircle2 size={17} />Cambios guardados</div>
+              )}
             </>
           )}
 

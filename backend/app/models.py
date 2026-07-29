@@ -94,6 +94,7 @@ class CallLogCreate(BaseModel):
     outcome_stage: OutcomeStage | None = None
     outcome: str = "Pendiente"
     outcome_id: str | None = None
+    commercial_status: str | None = Field(default=None, max_length=80)
     contact_name: str | None = None
     contact_title: str | None = None
     objection: str | None = None
