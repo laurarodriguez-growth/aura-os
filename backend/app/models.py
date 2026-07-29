@@ -8,6 +8,15 @@ from pydantic import BaseModel, Field, model_validator
 
 Niche = Literal["Dental", "Medicina estética"]
 ScoringMode = Literal["automatic", "manual", "template"]
+ConversationStatus = Literal[
+    "not_started", "waiting_response", "response_received", "conversation_active",
+    "waiting_decision_maker", "waiting_confirmation", "followup_scheduled", "closed",
+]
+OutcomeStage = Literal["pending", "provisional", "final"]
+ActivityType = Literal[
+    "contact_attempt", "call_made", "message_sent", "email_sent", "response_received",
+    "information_sent", "followup", "meeting", "note", "other",
+]
 
 
 class ScoringRule(BaseModel):
@@ -68,6 +77,9 @@ class LeadUpdate(BaseModel):
     manual_volume_score: int | None = Field(default=None, ge=0, le=6)
     manual_followup_score: int | None = Field(default=None, ge=0, le=8)
     manual_decision_maker_score: int | None = Field(default=None, ge=0, le=8)
+    conversation_status: ConversationStatus | None = None
+    outcome_stage: OutcomeStage | None = None
+    response_due_at: datetime | None = None
     do_not_contact: bool | None = None
 
 
@@ -76,7 +88,10 @@ class CallLogCreate(BaseModel):
     channel: Literal["Llamada", "WhatsApp", "Instagram", "Email", "Otro"] = "Llamada"
     direction: Literal["Saliente", "Entrante"] = "Saliente"
     duration_seconds: int | None = Field(default=None, ge=0, le=86400)
-    outcome: str
+    activity_type: ActivityType = "contact_attempt"
+    conversation_status: ConversationStatus = "not_started"
+    outcome_stage: OutcomeStage = "provisional"
+    outcome: str = "Pendiente"
     contact_name: str | None = None
     contact_title: str | None = None
     objection: str | None = None
@@ -85,6 +100,16 @@ class CallLogCreate(BaseModel):
     followup_date: date | None = None
     appointment_booked: bool = False
     sale_amount: float | None = Field(default=None, ge=0)
+    transcript: str | None = Field(default=None, max_length=50000)
+    analysis: dict[str, Any] = Field(default_factory=dict)
+    awaiting_response: bool = False
+    response_due_at: datetime | None = None
+    is_final_outcome: bool = False
+
+
+class ChatAnalysisRequest(BaseModel):
+    transcript: str = Field(min_length=1, max_length=50000)
+    channel: Literal["Llamada", "WhatsApp", "Instagram", "Email", "Otro"] | None = None
 
 
 UserRole = Literal["admin", "setter", "agent"]

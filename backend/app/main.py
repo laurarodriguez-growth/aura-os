@@ -11,13 +11,14 @@ from fastapi.responses import JSONResponse
 
 from .auditor import audit_website
 from .auth import CurrentUser, get_current_user, require_admin, user_feature_enabled
+from .chat_analysis import analyze_chat
 from .config import get_settings
 from .db import get_supabase
 from .diagnose import router as diagnose_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
 from .models import (
-    AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, LeadUpdate,
+    AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, ChatAnalysisRequest, LeadUpdate,
     ScoringTemplateCreate, SearchJobCreate,
 )
 from .scoring import (
@@ -55,6 +56,14 @@ CLOSED_STATUSES = ["Descartado", "No interesado", "No califica", "Implementació
 LEAD_CAPACITY_MAX = 100
 LEAD_GENERATION_UNLOCK_AT = 50
 CALL_LOG_PAGE_SIZES = [25, 50, 100]
+CONVERSATION_STATUSES = [
+    "not_started", "waiting_response", "response_received", "conversation_active",
+    "waiting_decision_maker", "waiting_confirmation", "followup_scheduled", "closed",
+]
+OUTCOME_STAGES = ["pending", "provisional", "final"]
+ACTIVE_CONVERSATION_STATUSES = {
+    "response_received", "conversation_active", "waiting_decision_maker", "waiting_confirmation",
+}
 FOCUS_CLOSED_STATUSES = ["Descartado", "No interesado", "No califica", "Implementación vendida"]
 PANAMA_TZ = ZoneInfo("America/Panama")
 
@@ -88,15 +97,30 @@ def _parse_date(value: Any) -> date | None:
         return None
 
 
+def _response_due_state(value: Any, now_local: datetime) -> tuple[str, int]:
+    due = _parse_datetime(value)
+    if not due:
+        return "none", 0
+    due_local = due.astimezone(PANAMA_TZ)
+    delta_seconds = int((now_local - due_local).total_seconds())
+    if delta_seconds >= 0:
+        return "overdue", max(0, delta_seconds // 3600)
+    if due_local.date() == now_local.date():
+        return "today", 0
+    return "future", 0
+
+
 def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     if lead.get("archived") or lead.get("excluded_reason") or lead.get("do_not_contact"):
         return None
     if str(lead.get("status") or "") in FOCUS_CLOSED_STATUSES:
         return None
 
+    now_local = datetime.now(PANAMA_TZ)
     followup = _parse_date(lead.get("next_followup_date"))
     last_contact = _parse_datetime(lead.get("last_contact_date"))
     last_contact_local = last_contact.astimezone(PANAMA_TZ).date() if last_contact else None
+    contacted_today = last_contact_local == today
     due_state = "none"
     days_overdue = 0
     if followup:
@@ -110,10 +134,8 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
         else:
             due_state = "future"
 
-    # Una actividad completada hoy sale de Aura Focus, salvo que tenga otro seguimiento para hoy.
-    if last_contact_local == today and due_state not in {"overdue", "today"}:
-        return None
-
+    conversation_status = str(lead.get("conversation_status") or "not_started")
+    response_due_state, response_overdue_hours = _response_due_state(lead.get("response_due_at"), now_local)
     status = str(lead.get("status") or "Nuevo")
     status_points = {
         "Nuevo": 10,
@@ -130,6 +152,34 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     }.get(status, 8)
     score = status_points
     reasons: list[str] = []
+
+    conversation_points = {
+        "response_received": 60,
+        "conversation_active": 48,
+        "waiting_confirmation": 40,
+        "waiting_decision_maker": 34,
+        "followup_scheduled": 22,
+        "waiting_response": -18 if response_due_state not in {"overdue", "today"} else 20,
+        "not_started": 4,
+    }.get(conversation_status, 0)
+    score += conversation_points
+    conversation_labels = {
+        "response_received": "El lead respondió: atender ahora",
+        "conversation_active": "Conversación activa",
+        "waiting_confirmation": "Esperando confirmación",
+        "waiting_decision_maker": "Pendiente del decisor",
+        "followup_scheduled": "Seguimiento acordado",
+        "waiting_response": "Esperando respuesta",
+    }
+    if conversation_status in conversation_labels:
+        reasons.append(conversation_labels[conversation_status])
+
+    if response_due_state == "overdue" and conversation_status == "waiting_response":
+        score += 35 + min(12, response_overdue_hours // 4)
+        reasons.append("Ya venció el tiempo de espera")
+    elif response_due_state == "today" and conversation_status == "waiting_response":
+        score += 16
+        reasons.append("La respuesta se espera hoy")
 
     if due_state == "overdue":
         score += 45 + min(days_overdue, 10)
@@ -162,6 +212,9 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
         "Solicitó información": 22,
         "Interesado": 28,
         "Respondió": 18,
+        "Contacto con intermediario": 12,
+        "Esperando confirmación": 18,
+        "Seguimiento solicitado": 14,
         "Recepción": 6,
         "Seguimiento": 14,
         "Reunión agendada": 20,
@@ -174,7 +227,7 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
 
     if last_contact_local:
         inactive_days = max(0, (today - last_contact_local).days)
-        if inactive_days >= 3:
+        if inactive_days >= 3 and conversation_status != "waiting_response":
             freshness = min(12, inactive_days)
             score += freshness
             reasons.append(f"Sin actividad hace {inactive_days} días")
@@ -183,11 +236,29 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     has_whatsapp = bool(lead.get("whatsapp_url") or lead.get("whatsapp_phone"))
     if has_phone and has_whatsapp:
         score += 5
-        reasons.append("Tiene teléfono y WhatsApp")
     elif has_phone or has_whatsapp:
         score += 2
 
-    if status in {"Interesado", "Respondió"}:
+    if conversation_status == "response_received":
+        action = "Responder al lead ahora"
+        channel = "WhatsApp" if has_whatsapp else "Llamada"
+    elif conversation_status == "conversation_active":
+        action = "Continuar la conversación"
+        channel = "WhatsApp" if has_whatsapp else "Llamada"
+    elif conversation_status == "waiting_decision_maker":
+        action = "Contactar o confirmar al decisor"
+        channel = "Llamada" if has_phone else "WhatsApp"
+    elif conversation_status == "waiting_confirmation":
+        action = "Confirmar el próximo paso"
+        channel = "WhatsApp" if has_whatsapp else "Llamada"
+    elif conversation_status == "waiting_response":
+        if response_due_state in {"overdue", "today"} or due_state in {"overdue", "today"}:
+            action = "Dar seguimiento por falta de respuesta"
+            channel = "WhatsApp" if has_whatsapp else "Llamada"
+        else:
+            action = "Esperar respuesta"
+            channel = "WhatsApp" if has_whatsapp else "Llamada"
+    elif status in {"Interesado", "Respondió"}:
         action = "Agendar o confirmar reunión" if status == "Interesado" else "Dar seguimiento inmediato"
         channel = "WhatsApp" if has_whatsapp else "Llamada"
     elif status == "Propuesta enviada":
@@ -199,12 +270,6 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     elif attempts == 0:
         action = "Realizar primer contacto"
         channel = "Llamada" if has_phone else "WhatsApp"
-    elif outcome in {"No respondió", "Buzón de voz"} and has_whatsapp:
-        action = "Cambiar de canal y escribir por WhatsApp"
-        channel = "WhatsApp"
-    elif outcome == "Recepción":
-        action = "Llamar y solicitar al decisor"
-        channel = "Llamada"
     else:
         action = "Dar seguimiento al lead"
         channel = "WhatsApp" if has_whatsapp else "Llamada"
@@ -214,11 +279,14 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
         **lead,
         "priority_score": max(0, score),
         "priority_level": level,
-        "priority_reasons": reasons[:4],
+        "priority_reasons": reasons[:5],
         "recommended_action": action,
         "recommended_channel": channel,
         "due_state": due_state,
         "days_overdue": days_overdue,
+        "response_due_state": response_due_state,
+        "response_overdue_hours": response_overdue_hours,
+        "contacted_today": contacted_today,
     }
 
 
@@ -311,6 +379,8 @@ def _call_log_query(
     date_to: date | None = None,
     channel: str | None = None,
     outcome: str | None = None,
+    conversation_status: str | None = None,
+    outcome_stage: str | None = None,
     agent_id: str | None = None,
     count: str | None = None,
 ) -> Any:
@@ -329,6 +399,10 @@ def _call_log_query(
                     f"notes.ilike.{pattern}",
                     f"objection.ilike.{pattern}",
                     f"outcome.ilike.{pattern}",
+                    f"conversation_status.ilike.{pattern}",
+                    f"outcome_stage.ilike.{pattern}",
+                    f"activity_type.ilike.{pattern}",
+                    f"transcript.ilike.{pattern}",
                     f"next_step.ilike.{pattern}",
                     f"channel.ilike.{pattern}",
                 ]
@@ -342,6 +416,10 @@ def _call_log_query(
         query = query.eq("channel", channel)
     if outcome:
         query = query.eq("outcome", outcome)
+    if conversation_status:
+        query = query.eq("conversation_status", conversation_status)
+    if outcome_stage:
+        query = query.eq("outcome_stage", outcome_stage)
     if agent_id:
         query = query.eq("agent_id", agent_id)
     return query
@@ -354,6 +432,8 @@ def _fetch_filtered_call_logs(
     date_to: date | None = None,
     channel: str | None = None,
     outcome: str | None = None,
+    conversation_status: str | None = None,
+    outcome_stage: str | None = None,
     agent_id: str | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
@@ -367,6 +447,8 @@ def _fetch_filtered_call_logs(
                 date_to=date_to,
                 channel=channel,
                 outcome=outcome,
+                conversation_status=conversation_status,
+                outcome_stage=outcome_stage,
                 agent_id=agent_id,
             )
             .order("occurred_at", desc=True)
@@ -724,6 +806,8 @@ def public_config(user: Annotated[CurrentUser, Depends(get_current_user)]) -> di
         "lead_capacity_max": LEAD_CAPACITY_MAX,
         "lead_generation_unlock_at": LEAD_GENERATION_UNLOCK_AT,
         "call_log_page_sizes": CALL_LOG_PAGE_SIZES,
+        "conversation_statuses": CONVERSATION_STATUSES,
+        "outcome_stages": OUTCOME_STAGES,
     }
 
 
@@ -1126,12 +1210,13 @@ def step_search_job(
 def aura_focus(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     scope: str = Query(default="mine", pattern="^(mine|all)$"),
+    bucket: str = Query(default="priority", pattern="^(priority|active|waiting|followups)$"),
     limit: int = Query(default=100, ge=1, le=200),
 ) -> dict[str, Any]:
     today = panama_today()
     leads = _fetch_all("leads")
     profiles = _profile_map()
-    items: list[dict[str, Any]] = []
+    all_items: list[dict[str, Any]] = []
 
     for lead in leads:
         owner_id = str(lead.get("owner_id") or "")
@@ -1142,8 +1227,33 @@ def aura_focus(
         if not enriched:
             continue
         enriched["owner_name"] = profiles.get(owner_id, "Sin asignar") if owner_id else "Sin asignar"
-        items.append(enriched)
+        all_items.append(enriched)
 
+    active_items = [item for item in all_items if item.get("conversation_status") in ACTIVE_CONVERSATION_STATUSES]
+    waiting_items = [item for item in all_items if item.get("conversation_status") == "waiting_response"]
+    followup_items = [item for item in all_items if item.get("due_state") in {"overdue", "today"} or item.get("response_due_state") in {"overdue", "today"}]
+    priority_items = [
+        item for item in all_items
+        if not (
+            item.get("conversation_status") == "waiting_response"
+            and item.get("response_due_state") not in {"overdue", "today"}
+            and item.get("due_state") not in {"overdue", "today"}
+        )
+        and not (
+            item.get("contacted_today")
+            and item.get("conversation_status") not in ACTIVE_CONVERSATION_STATUSES
+            and item.get("due_state") not in {"overdue", "today"}
+            and item.get("response_due_state") not in {"overdue", "today"}
+        )
+    ]
+
+    bucket_map = {
+        "priority": priority_items,
+        "active": active_items,
+        "waiting": waiting_items,
+        "followups": followup_items,
+    }
+    items = bucket_map[bucket]
     items.sort(
         key=lambda item: (
             int(item.get("priority_score") or 0),
@@ -1157,9 +1267,14 @@ def aura_focus(
     return {
         "items": selected,
         "total": total,
-        "overdue": sum(1 for item in items if item.get("due_state") == "overdue"),
-        "due_today": sum(1 for item in items if item.get("due_state") == "today"),
-        "unassigned": sum(1 for item in items if not item.get("owner_id")),
+        "overdue": sum(1 for item in all_items if item.get("due_state") == "overdue" or item.get("response_due_state") == "overdue"),
+        "due_today": sum(1 for item in all_items if item.get("due_state") == "today" or item.get("response_due_state") == "today"),
+        "unassigned": sum(1 for item in all_items if not item.get("owner_id")),
+        "active_conversations": len(active_items),
+        "waiting_responses": len(waiting_items),
+        "followups": len(followup_items),
+        "priorities": len(priority_items),
+        "bucket": bucket,
         "scope": "all" if user.role == "admin" and scope == "all" else "mine",
         "generated_at": datetime.now(PANAMA_TZ).isoformat(),
     }
@@ -1324,6 +1439,32 @@ def update_lead(
     return _first(response) or {**lead, **changes}
 
 
+def _default_response_due(channel: str, occurred_at: datetime) -> datetime:
+    hours = {
+        "Llamada": 4,
+        "WhatsApp": 24,
+        "Instagram": 36,
+        "Email": 48,
+        "Otro": 24,
+    }.get(channel, 24)
+    return occurred_at + timedelta(hours=hours)
+
+
+def _counts_as_contact_attempt(payload: CallLogCreate) -> bool:
+    return (
+        payload.direction == "Saliente"
+        and payload.activity_type in {"contact_attempt", "call_made", "message_sent", "email_sent", "followup"}
+    )
+
+
+@app.post("/api/chat-analysis")
+def chat_analysis(
+    payload: ChatAnalysisRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> dict[str, Any]:
+    return analyze_chat(payload.transcript, channel=payload.channel, today=panama_today())
+
+
 @app.post("/api/leads/{lead_id}/call-logs")
 def create_call_log(
     lead_id: str,
@@ -1331,45 +1472,106 @@ def create_call_log(
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> dict[str, Any]:
     db = get_supabase()
-    lead = _first(db.table("leads").select("id,status,first_contact_date").eq("id", lead_id).limit(1).execute())
+    lead = _first(
+        db.table("leads")
+        .select("id,status,first_contact_date,contact_attempts,conversation_status")
+        .eq("id", lead_id)
+        .limit(1)
+        .execute()
+    )
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
+
+    occurred_at = payload.occurred_at or datetime.now(timezone.utc)
+    response_due_at = payload.response_due_at
+    if payload.awaiting_response and not response_due_at:
+        response_due_at = _default_response_due(payload.channel, occurred_at)
+
     row = payload.model_dump(mode="json")
     row["lead_id"] = lead_id
     row["agent_id"] = user.id
-    row["occurred_at"] = (payload.occurred_at or datetime.now(timezone.utc)).isoformat()
+    row["occurred_at"] = occurred_at.isoformat()
+    row["response_due_at"] = response_due_at.isoformat() if response_due_at else None
+    row["is_final_outcome"] = bool(payload.is_final_outcome or payload.outcome_stage == "final")
+    if row["is_final_outcome"]:
+        row["outcome_stage"] = "final"
     response = db.table("call_logs").insert(row).execute()
     call = _first(response) or row
 
-    rpc_data = db.rpc("increment_lead_contact_attempts", {"p_lead_id": lead_id}).execute().data
-    if isinstance(rpc_data, list):
-        attempt_count = int(rpc_data[0]) if rpc_data else 1
-    else:
-        attempt_count = int(rpc_data or 1)
+    attempt_count = int(lead.get("contact_attempts") or 0)
+    if _counts_as_contact_attempt(payload):
+        rpc_data = db.rpc("increment_lead_contact_attempts", {"p_lead_id": lead_id}).execute().data
+        if isinstance(rpc_data, list):
+            attempt_count = int(rpc_data[0]) if rpc_data else attempt_count + 1
+        else:
+            attempt_count = int(rpc_data or attempt_count + 1)
+
     lead_update: dict[str, Any] = {
         "last_contact_date": row["occurred_at"],
         "owner_id": user.id,
-        "outcome": payload.outcome,
         "contact_attempts": attempt_count,
+        "conversation_status": payload.conversation_status,
+        "conversation_status_changed_at": row["occurred_at"],
+        "outcome_stage": row["outcome_stage"],
     }
-    if not lead.get("first_contact_date"):
-        lead_update["first_contact_date"] = date.today().isoformat()
+
+    if payload.outcome and payload.outcome != "Pendiente":
+        lead_update["outcome"] = payload.outcome
+    if payload.direction == "Entrante" or payload.activity_type == "response_received":
+        lead_update["last_inbound_at"] = row["occurred_at"]
+        lead_update["waiting_since"] = None
+        lead_update["response_due_at"] = None
+    elif _counts_as_contact_attempt(payload):
+        lead_update["last_outbound_at"] = row["occurred_at"]
+    if payload.awaiting_response:
+        lead_update["waiting_since"] = row["occurred_at"]
+        lead_update["response_due_at"] = row["response_due_at"]
+    elif payload.conversation_status != "waiting_response":
+        lead_update["waiting_since"] = None
+        if payload.conversation_status in ACTIVE_CONVERSATION_STATUSES or payload.conversation_status == "closed":
+            lead_update["response_due_at"] = None
+
+    if not lead.get("first_contact_date") and _counts_as_contact_attempt(payload):
+        lead_update["first_contact_date"] = panama_today().isoformat()
     if payload.followup_date:
         lead_update["next_followup_date"] = payload.followup_date.isoformat()
+
+    if row["is_final_outcome"]:
+        lead_update["final_outcome_at"] = row["occurred_at"]
+
     outcome_status = {
         "Respondió": "Respondió",
+        "Solicitó información": "Respondió",
         "Interesado": "Interesado",
         "Reunión agendada": "Reunión agendada",
         "No interesado": "No interesado",
         "No califica": "No califica",
+        "Número incorrecto": "No califica",
         "Venta": "Implementación vendida",
     }.get(payload.outcome)
     if outcome_status:
         lead_update["status"] = outcome_status
-    elif lead.get("status") in {"Nuevo", "Investigando", "Listo para contactar"}:
+    elif payload.conversation_status in ACTIVE_CONVERSATION_STATUSES:
+        lead_update["status"] = "Respondió"
+    elif payload.conversation_status == "followup_scheduled":
+        lead_update["status"] = "Seguimiento 1"
+    elif payload.conversation_status == "waiting_response" and lead.get("status") in {"Nuevo", "Investigando", "Listo para contactar"}:
         lead_update["status"] = "Contactado"
+
     db.table("leads").update(lead_update).eq("id", lead_id).execute()
-    _log_activity(lead_id, user.id, "contact_logged", f"{payload.channel}: {payload.outcome}", {"call_log_id": call.get("id")})
+    description_outcome = payload.outcome if payload.outcome != "Pendiente" else payload.conversation_status
+    _log_activity(
+        lead_id,
+        user.id,
+        "contact_logged",
+        f"{payload.channel}: {description_outcome}",
+        {
+            "call_log_id": call.get("id"),
+            "activity_type": payload.activity_type,
+            "conversation_status": payload.conversation_status,
+            "outcome_stage": row["outcome_stage"],
+        },
+    )
     return call
 
 
@@ -1383,6 +1585,8 @@ def list_call_logs(
     date_to: date | None = None,
     channel: str | None = None,
     outcome: str | None = None,
+    conversation_status: str | None = None,
+    outcome_stage: str | None = None,
     agent_id: str | None = None,
 ) -> dict[str, Any]:
     if page_size not in CALL_LOG_PAGE_SIZES:
@@ -1395,6 +1599,8 @@ def list_call_logs(
             date_to=date_to,
             channel=channel,
             outcome=outcome,
+            conversation_status=conversation_status,
+            outcome_stage=outcome_stage,
             agent_id=agent_id,
             count="exact",
         )
@@ -1461,8 +1667,13 @@ def dashboard(
     if date_to:
         call_query = call_query.lte("occurred_at", f"{date_to.isoformat()}T23:59:59Z")
     calls = call_query.execute().data or []
-    non_contact = {"No respondió", "Buzón de voz", "Número incorrecto"}
-    connected = sum(1 for item in calls if item.get("outcome") not in non_contact)
+    non_contact = {"No respondió", "Buzón de voz", "Número incorrecto", "Pendiente"}
+    connected = sum(
+        1 for item in calls
+        if item.get("direction") == "Entrante"
+        or item.get("activity_type") == "response_received"
+        or item.get("outcome") not in non_contact
+    )
     meetings = sum(1 for item in calls if item.get("appointment_booked") or item.get("outcome") == "Reunión agendada")
     sales = sum(1 for item in calls if item.get("outcome") == "Venta" or float(item.get("sale_amount") or 0) > 0)
     revenue = sum(float(item.get("sale_amount") or 0) for item in calls)
@@ -1506,6 +1717,8 @@ def export_call_logs(
     date_to: date | None = None,
     channel: str | None = None,
     outcome: str | None = None,
+    conversation_status: str | None = None,
+    outcome_stage: str | None = None,
     agent_id: str | None = None,
 ) -> Any:
     calls = _fetch_filtered_call_logs(
@@ -1514,9 +1727,11 @@ def export_call_logs(
         date_to=date_to,
         channel=channel,
         outcome=outcome,
+        conversation_status=conversation_status,
+        outcome_stage=outcome_stage,
         agent_id=agent_id,
     )
-    filtered = any([search, date_from, date_to, channel, outcome, agent_id])
+    filtered = any([search, date_from, date_to, channel, outcome, conversation_status, outcome_stage, agent_id])
     suffix = "filtrado_" if filtered else ""
     return csv_response(
         calls,

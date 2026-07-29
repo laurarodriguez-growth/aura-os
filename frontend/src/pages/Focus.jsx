@@ -1,14 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
   AlarmClock,
-  BrainCircuit,
   ArrowRight,
-  CalendarPlus,
+  BrainCircuit,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ExternalLink,
-  FileText,
   MessageCircle,
   Phone,
   RefreshCw,
@@ -19,33 +17,9 @@ import {
 import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import LeadDrawer from '../components/LeadDrawer';
+import ContactComposer, { conversationLabel } from '../components/ContactComposer';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
-
-const outcomes = [
-  'No respondió',
-  'Buzón de voz',
-  'Número incorrecto',
-  'Recepción',
-  'Respondió',
-  'Solicitó información',
-  'Interesado',
-  'Seguimiento',
-  'Reunión agendada',
-  'No interesado',
-  'No califica',
-  'Venta',
-];
-
-const emptyLog = {
-  channel: 'Llamada',
-  outcome: 'No respondió',
-  notes: '',
-  next_step: '',
-  followup_date: '',
-  appointment_booked: false,
-  sale_amount: '',
-};
 
 function localISODate(daysFromToday = 0) {
   const value = new Date();
@@ -62,29 +36,37 @@ function whatsappLink(lead) {
   return digits ? `https://wa.me/${digits}` : '';
 }
 
+const bucketOptions = [
+  ['priority', 'Prioridades'],
+  ['active', 'Respondieron'],
+  ['followups', 'Seguimientos'],
+  ['waiting', 'Esperando'],
+];
+
 export default function Focus() {
   const { profile } = useAuth();
   const [queue, setQueue] = useState([]);
   const [diagnoseTasks, setDiagnoseTasks] = useState([]);
   const [summary, setSummary] = useState({ total: 0, overdue: 0, due_today: 0, unassigned: 0 });
   const [scope, setScope] = useState('mine');
+  const [bucket, setBucket] = useState('priority');
   const [profiles, setProfiles] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [selected, setSelected] = useState(null);
   const [showLog, setShowLog] = useState(false);
+  const [logMode, setLogMode] = useState('action');
   const [showDetails, setShowDetails] = useState(false);
-  const [log, setLog] = useState(emptyLog);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const load = async (nextScope = scope) => {
+  const load = async (nextScope = scope, nextBucket = bucket) => {
     setLoading(true);
     setError('');
     try {
       const [focusData, taskData, profileRows, config] = await Promise.all([
-        api(`/api/focus?scope=${nextScope}&limit=100`),
+        api(`/api/focus?scope=${nextScope}&bucket=${nextBucket}&limit=100`),
         api(`/api/focus/diagnose-tasks?scope=${nextScope}&limit=20`),
         profiles.length ? Promise.resolve(profiles) : api('/api/profiles'),
         statuses.length ? Promise.resolve({ statuses }) : api('/api/config'),
@@ -101,7 +83,7 @@ export default function Focus() {
     }
   };
 
-  useEffect(() => { load('mine'); }, []);
+  useEffect(() => { load('mine', 'priority'); }, []);
 
   useEffect(() => {
     document.body.classList.toggle('focus-sheet-open', showLog);
@@ -112,7 +94,7 @@ export default function Focus() {
 
   useEffect(() => {
     if (!success) return undefined;
-    const timer = window.setTimeout(() => setSuccess(''), 2600);
+    const timer = window.setTimeout(() => setSuccess(''), 3000);
     return () => window.clearTimeout(timer);
   }, [success]);
 
@@ -121,13 +103,19 @@ export default function Focus() {
   const progressText = summary.total
     ? `${Math.max(1, summary.total - queue.length + 1)} de ${summary.total}`
     : '0 de 0';
-
   const focusReasons = useMemo(() => current?.priority_reasons || [], [current]);
 
   const changeScope = (value) => {
     setScope(value);
     setSuccess('');
-    load(value);
+    load(value, bucket);
+  };
+
+  const changeBucket = (value) => {
+    setBucket(value);
+    setSuccess('');
+    setShowLog(false);
+    load(scope, value);
   };
 
   const rotate = () => {
@@ -142,33 +130,28 @@ export default function Focus() {
     setQueue((items) => items.slice(1));
     setShowLog(false);
     setShowDetails(false);
-    setLog(emptyLog);
     setSuccess(message);
   };
 
-  const openLog = () => {
-    setLog({
-      ...emptyLog,
-      channel: current?.recommended_channel || 'Llamada',
-    });
+  const openLog = (mode) => {
+    setLogMode(mode);
     setShowLog(true);
     setSuccess('');
   };
 
-  const saveLog = async () => {
+  const saveLog = async (payload) => {
     if (!current) return;
     setSaving(true);
     setError('');
     try {
       await api(`/api/leads/${current.id}/call-logs`, {
         method: 'POST',
-        body: JSON.stringify({
-          ...log,
-          followup_date: log.followup_date || null,
-          sale_amount: log.sale_amount === '' ? null : Number(log.sale_amount),
-        }),
+        body: JSON.stringify(payload),
       });
-      removeCurrent('Resultado guardado. Focus seleccionó la siguiente acción.');
+      const message = payload.activity_type === 'response_received'
+        ? 'Respuesta guardada. Focus actualizó la conversación y seleccionó la siguiente acción.'
+        : 'Acción guardada. El lead queda esperando respuesta y puedes seguir trabajando.';
+      removeCurrent(message);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -187,6 +170,8 @@ export default function Focus() {
           next_followup_date: localISODate(days),
           owner_id: profile.id,
           status: current.status === 'Nuevo' ? 'Seguimiento 1' : current.status,
+          conversation_status: 'followup_scheduled',
+          outcome_stage: 'provisional',
         }),
       });
       removeCurrent(`Seguimiento pospuesto ${days === 1 ? 'para mañana' : `${days} días`}.`);
@@ -215,11 +200,18 @@ export default function Focus() {
     updateDiagnoseTask(task, { due_date: localISODate(days), status: 'pending' }, `Acción de Diagnose pospuesta ${days === 1 ? 'para mañana' : `${days} días`}.`);
   };
 
+  const bucketCount = (key) => ({
+    priority: summary.priorities || 0,
+    active: summary.active_conversations || 0,
+    followups: summary.followups || 0,
+    waiting: summary.waiting_responses || 0,
+  }[key]);
+
   return (
     <>
       <PageHeader
         title="Hoy"
-        description="Focus convierte la operación en una secuencia clara: una prioridad, una acción y el siguiente paso."
+        description="Trabaja varias conversaciones sin cerrarlas antes de tiempo: cada acción se guarda y el outcome evoluciona con la respuesta."
         actions={(
           <>
             {profile?.role === 'admin' && (
@@ -233,11 +225,19 @@ export default function Focus() {
         )}
       />
 
-      <section className="focus-summary-grid">
-        <div><span>Acciones activas</span><strong>{summary.total || 0}</strong></div>
+      <nav className="focus-bucket-tabs" aria-label="Bandejas de Focus">
+        {bucketOptions.map(([value, label]) => (
+          <button key={value} className={bucket === value ? 'active' : ''} onClick={() => changeBucket(value)}>
+            <span>{label}</span><strong>{bucketCount(value)}</strong>
+          </button>
+        ))}
+      </nav>
+
+      <section className="focus-summary-grid async-summary">
+        <div><span>Conversaciones activas</span><strong>{summary.active_conversations || 0}</strong></div>
+        <div><span>Esperando respuesta</span><strong>{summary.waiting_responses || 0}</strong></div>
+        <div><span>Seguimientos</span><strong>{summary.followups || 0}</strong></div>
         <div><span>Vencidas</span><strong>{summary.overdue || 0}</strong></div>
-        <div><span>Para hoy</span><strong>{summary.due_today || 0}</strong></div>
-        <div><span>Sin asignar</span><strong>{summary.unassigned || 0}</strong></div>
       </section>
 
       {error && <div className="form-error page-error">{error}</div>}
@@ -264,7 +264,7 @@ export default function Focus() {
         <section className="panel focus-loading"><Sparkles size={22} />Focus está ordenando tus prioridades…</section>
       ) : !current ? (
         <section className="panel focus-empty">
-          <EmptyState title="Tu día está al día" text="No hay otra acción prioritaria en este momento. Puedes actualizar la cola o revisar la Base de leads." />
+          <EmptyState title="Esta bandeja está al día" text="No hay otra acción en esta vista. Cambia de bandeja o actualiza la cola." />
           <button className="button primary" onClick={() => load()}><RotateCcw size={16} />Revisar nuevamente</button>
         </section>
       ) : (
@@ -272,16 +272,20 @@ export default function Focus() {
           <article className="focus-card">
             <header className="focus-card-top">
               <div>
-                <p className="eyebrow">FOCUS · SIGUIENTE MEJOR ACCIÓN · {progressText}</p>
+                <p className="eyebrow">FOCUS · {bucketOptions.find(([value]) => value === bucket)?.[1].toUpperCase()} · {progressText}</p>
                 <h2>{current.business_name}</h2>
                 <p>{current.address || 'Dirección no disponible'}</p>
               </div>
               <div className={`focus-priority ${String(current.priority_level || '').toLowerCase()}`}>
-                <span>Momentum</span>
-                <strong>{current.priority_score}</strong>
-                <small>{current.priority_level}</small>
+                <span>Momentum</span><strong>{current.priority_score}</strong><small>{current.priority_level}</small>
               </div>
             </header>
+
+            <div className="conversation-state-banner">
+              <MessageCircle size={18} />
+              <div><small>ESTADO DE CONVERSACIÓN</small><strong>{conversationLabel(current.conversation_status)}</strong></div>
+              <span className={`outcome-stage ${current.outcome_stage || 'pending'}`}>{current.outcome_stage === 'final' ? 'Final' : current.outcome_stage === 'provisional' ? 'Provisional' : 'Pendiente'}</span>
+            </div>
 
             <button className="focus-details-toggle" onClick={() => setShowDetails((value) => !value)} aria-expanded={showDetails}>
               {showDetails ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
@@ -290,28 +294,23 @@ export default function Focus() {
 
             <div className={`focus-lead-kpis ${showDetails ? 'mobile-open' : ''}`}>
               <div><span>ICP</span><strong>{current.final_score}</strong><small>Tier {current.final_tier}</small></div>
-              <div><span>Estado</span><strong>{current.status}</strong><small>{current.outcome || 'Sin resultado previo'}</small></div>
+              <div><span>Estado</span><strong>{current.status}</strong><small>{current.outcome || 'Sin outcome'}</small></div>
               <div><span>Intentos</span><strong>{current.contact_attempts || 0}</strong><small>{current.owner_name || 'Sin asignar'}</small></div>
-              <div><span>Seguimiento</span><strong>{current.next_followup_date || 'Sin fecha'}</strong><small>{current.due_state === 'overdue' ? 'Vencido' : current.due_state === 'today' ? 'Para hoy' : 'Programación actual'}</small></div>
+              <div><span>Seguimiento</span><strong>{current.next_followup_date || 'Sin fecha'}</strong><small>{current.response_due_state === 'overdue' ? 'Espera vencida' : current.due_state === 'overdue' ? 'Vencido' : current.due_state === 'today' ? 'Para hoy' : 'Programación actual'}</small></div>
             </div>
 
             <div className="focus-recommendation">
               <span className="focus-recommendation-icon"><Target size={22} /></span>
-              <div>
-                <small>ACCIÓN RECOMENDADA</small>
-                <h3>{current.recommended_action}</h3>
-                <p>Canal sugerido: <strong>{current.recommended_channel}</strong></p>
-              </div>
+              <div><small>ACCIÓN RECOMENDADA</small><h3>{current.recommended_action}</h3><p>Canal sugerido: <strong>{current.recommended_channel}</strong></p></div>
             </div>
 
-            <div className="focus-reasons">
-              {focusReasons.map((reason) => <span key={reason}>{reason}</span>)}
-            </div>
+            <div className="focus-reasons">{focusReasons.map((reason) => <span key={reason}>{reason}</span>)}</div>
 
-            <div className="focus-primary-actions">
+            <div className="focus-primary-actions async-actions">
               {current.phone && <a className="focus-action call" href={`tel:${current.phone}`}><Phone size={21} /><span>Llamar ahora</span><small>{current.phone}</small></a>}
               {wa && <a className="focus-action whatsapp" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={21} /><span>Abrir WhatsApp</span><small>Contactar por mensaje</small></a>}
-              <button className="focus-action log" onClick={openLog}><FileText size={21} /><span>Ya contacté · Registrar</span><small>Guardar lo ocurrido</small></button>
+              <button className="focus-action log" onClick={() => openLog('action')}><ArrowRight size={21} /><span>Registrar envío</span><small>Guardar y seguir con otro lead</small></button>
+              <button className="focus-action response" onClick={() => openLog('response')}><MessageCircle size={21} /><span>Registrar respuesta</span><small>Analizar y actualizar outcome</small></button>
             </div>
 
             <div className="focus-secondary-actions">
@@ -330,22 +329,16 @@ export default function Focus() {
           {showLog && (
             <>
               <button className="focus-log-backdrop" onClick={() => setShowLog(false)} aria-label="Cerrar registro rápido" />
-              <aside className="panel focus-log-panel">
-              <header><div><p className="eyebrow">REGISTRO RÁPIDO</p><h3>¿Qué ocurrió?</h3></div><button className="icon-button" onClick={() => setShowLog(false)}>×</button></header>
-              <div className="form-grid two">
-                <label>Canal<select value={log.channel} onChange={(e) => setLog({ ...log, channel: e.target.value })}><option>Llamada</option><option>WhatsApp</option><option>Instagram</option><option>Email</option><option>Otro</option></select></label>
-                <label>Resultado<select value={log.outcome} onChange={(e) => setLog({ ...log, outcome: e.target.value })}>{outcomes.map((item) => <option key={item}>{item}</option>)}</select></label>
-                <label>Próximo seguimiento<input type="date" value={log.followup_date} onChange={(e) => setLog({ ...log, followup_date: e.target.value })} /></label>
-                <label>Próximo paso<input value={log.next_step} onChange={(e) => setLog({ ...log, next_step: e.target.value })} placeholder="Ej. llamar a la administradora" /></label>
-              </div>
-              <label>Notas<textarea rows="4" value={log.notes} onChange={(e) => setLog({ ...log, notes: e.target.value })} placeholder="Contexto útil para el siguiente contacto" /></label>
-              <div className="focus-log-options">
-                <label className="check-row"><input type="checkbox" checked={log.appointment_booked} onChange={(e) => setLog({ ...log, appointment_booked: e.target.checked })} />Reunión agendada</label>
-                <label>Monto de venta<input type="number" min="0" step="0.01" value={log.sale_amount} onChange={(e) => setLog({ ...log, sale_amount: e.target.value })} placeholder="0.00" /></label>
-              </div>
-              <div className="focus-log-savebar">
-                <button className="button primary full" onClick={saveLog} disabled={saving || !log.outcome}><CheckCircle2 size={17} />{saving ? 'Guardando…' : 'Guardar y mostrar siguiente'}</button>
-              </div>
+              <aside className="panel focus-log-panel async-contact-panel">
+                <header><div><p className="eyebrow">REGISTRO ASÍNCRONO</p><h3>{logMode === 'response' ? 'Actualizar conversación' : 'Guardar acción'}</h3></div><button className="icon-button" onClick={() => setShowLog(false)}>×</button></header>
+                <ContactComposer
+                  key={`${current.id}-${logMode}`}
+                  initialMode={logMode}
+                  initialChannel={current.recommended_channel || 'Llamada'}
+                  saving={saving}
+                  onSubmit={saveLog}
+                  onCancel={() => setShowLog(false)}
+                />
               </aside>
             </>
           )}

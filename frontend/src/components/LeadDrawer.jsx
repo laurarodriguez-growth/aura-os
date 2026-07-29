@@ -1,20 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, CheckCircle2, ExternalLink, Phone, Save, X } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Phone, Save, X } from 'lucide-react';
 import { api } from '../lib/api';
-
-const defaultCall = {
-  channel: 'Llamada',
-  direction: 'Saliente',
-  outcome: 'No respondió',
-  contact_name: '',
-  contact_title: '',
-  objection: '',
-  notes: '',
-  next_step: '',
-  followup_date: '',
-  appointment_booked: false,
-  sale_amount: '',
-};
+import ContactComposer, { conversationLabel, outcomeStageLabel } from './ContactComposer';
 
 function formFromLead(data) {
   return {
@@ -30,6 +17,8 @@ function formFromLead(data) {
     manual_volume_score: Number(data.manual_volume_score || 0),
     manual_followup_score: Number(data.manual_followup_score || 0),
     manual_decision_maker_score: Number(data.manual_decision_maker_score || 0),
+    conversation_status: data.conversation_status || 'not_started',
+    outcome_stage: data.outcome_stage || 'pending',
     do_not_contact: Boolean(data.do_not_contact),
   };
 }
@@ -51,7 +40,6 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
   const [lead, setLead] = useState(null);
   const [form, setForm] = useState({});
   const [baseline, setBaseline] = useState({});
-  const [call, setCall] = useState(defaultCall);
   const [tab, setTab] = useState('profile');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -107,17 +95,11 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
     }
   };
 
-  const saveCall = async () => {
+  const saveContact = async (payload) => {
     setSaving(true);
     setError('');
     try {
-      const payload = {
-        ...call,
-        followup_date: call.followup_date || null,
-        sale_amount: call.sale_amount === '' ? null : Number(call.sale_amount),
-      };
       await api(`/api/leads/${leadId}/call-logs`, { method: 'POST', body: JSON.stringify(payload) });
-      setCall(defaultCall);
       await load();
       onChanged?.();
       setTab('history');
@@ -144,24 +126,14 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
     ['WhatsApp', lead.whatsapp_url],
   ].filter(([, url]) => url);
 
-  const saveLabel = saving
-    ? 'Guardando…'
-    : dirty
-      ? 'Guardar cambios'
-      : saved
-        ? 'Cambios guardados'
-        : 'Sin cambios';
+  const saveLabel = saving ? 'Guardando…' : dirty ? 'Guardar cambios' : saved ? 'Cambios guardados' : 'Sin cambios';
 
   return (
     <div className="drawer-layer">
       <button className="drawer-backdrop" onClick={onClose} aria-label="Cerrar" />
       <aside className="lead-drawer">
         <header className="drawer-header">
-          <div>
-            <p className="eyebrow">FICHA DEL LEAD</p>
-            <h2>{lead.business_name}</h2>
-            <p>{lead.address || 'Dirección no disponible'}</p>
-          </div>
+          <div><p className="eyebrow">FICHA DEL LEAD</p><h2>{lead.business_name}</h2><p>{lead.address || 'Dirección no disponible'}</p></div>
           <button className="icon-button" onClick={onClose}><X /></button>
         </header>
 
@@ -169,12 +141,12 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
           <div><span>Score</span><strong>{lead.final_score}</strong></div>
           <div><span>Tier</span><strong>{lead.final_tier}</strong></div>
           <div><span>Intentos</span><strong>{lead.contact_attempts}</strong></div>
-          <div><span>Reseñas</span><strong>{lead.review_count}</strong></div>
+          <div><span>Conversación</span><strong className="conversation-mini">{conversationLabel(lead.conversation_status)}</strong></div>
         </div>
 
         <nav className="drawer-tabs">
           <button className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}>Clasificación</button>
-          <button className={tab === 'contact' ? 'active' : ''} onClick={() => setTab('contact')}>Registrar contacto</button>
+          <button className={tab === 'contact' ? 'active' : ''} onClick={() => setTab('contact')}>Registrar actividad</button>
           <button className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>Historial</button>
         </nav>
 
@@ -187,10 +159,32 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                 {lead.phone && <a href={`tel:${lead.phone}`}><Phone size={16} />{lead.phone}</a>}
                 {links.map(([label, url]) => <a key={label} href={url} target="_blank" rel="noreferrer">{label}<ExternalLink size={14} /></a>)}
               </div>
+              <div className="conversation-profile-card">
+                <div><small>Estado de conversación</small><strong>{conversationLabel(form.conversation_status)}</strong></div>
+                <div><small>Outcome</small><strong>{form.outcome || 'Pendiente'}</strong></div>
+                <div><small>Madurez</small><strong>{outcomeStageLabel(form.outcome_stage)}</strong></div>
+              </div>
               <div className="form-grid two">
-                <label>Estado<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((s) => <option key={s}>{s}</option>)}</select></label>
-                <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((p) => <option key={p.id} value={p.id}>{p.full_name}</option>)}</select></label>
-                <label>Resultado<input value={form.outcome} onChange={(e) => changeForm({ outcome: e.target.value })} placeholder="Ej. Solicitó información" /></label>
+                <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
+                <label>Responsable<select value={form.owner_id} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.full_name}</option>)}</select></label>
+                <label>Estado de conversación
+                  <select value={form.conversation_status} onChange={(e) => changeForm({ conversation_status: e.target.value })}>
+                    <option value="not_started">No iniciada</option>
+                    <option value="waiting_response">Esperando respuesta</option>
+                    <option value="response_received">Respuesta recibida</option>
+                    <option value="conversation_active">Conversación activa</option>
+                    <option value="waiting_decision_maker">Esperando al decisor</option>
+                    <option value="waiting_confirmation">Esperando confirmación</option>
+                    <option value="followup_scheduled">Seguimiento programado</option>
+                    <option value="closed">Cerrada</option>
+                  </select>
+                </label>
+                <label>Madurez del outcome
+                  <select value={form.outcome_stage} onChange={(e) => changeForm({ outcome_stage: e.target.value })}>
+                    <option value="pending">Pendiente</option><option value="provisional">Provisional</option><option value="final">Final</option>
+                  </select>
+                </label>
+                <label>Outcome<input value={form.outcome} onChange={(e) => changeForm({ outcome: e.target.value })} placeholder="Ej. Solicitó información" /></label>
                 <label>Próximo seguimiento<input type="date" value={form.next_followup_date} onChange={(e) => changeForm({ next_followup_date: e.target.value })} /></label>
                 <label>Decisor<input value={form.decision_maker_name} onChange={(e) => changeForm({ decision_maker_name: e.target.value })} /></label>
                 <label>Cargo<input value={form.decision_maker_title} onChange={(e) => changeForm({ decision_maker_title: e.target.value })} /></label>
@@ -205,37 +199,32 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
               </div>
               <label className="check-row"><input type="checkbox" checked={form.do_not_contact} onChange={(e) => changeForm({ do_not_contact: e.target.checked })} />No volver a contactar</label>
               <button className={`button full ${dirty ? 'primary' : 'save-idle'}`} onClick={save} disabled={saving || !dirty}>
-                {saved && !dirty ? <CheckCircle2 size={17} /> : <Save size={17} />}
-                {saveLabel}
+                {saved && !dirty ? <CheckCircle2 size={17} /> : <Save size={17} />}{saveLabel}
               </button>
             </>
           )}
 
           {tab === 'contact' && (
-            <>
-              <div className="form-grid two">
-                <label>Canal<select value={call.channel} onChange={(e) => setCall({ ...call, channel: e.target.value })}>{['Llamada', 'WhatsApp', 'Instagram', 'Email', 'Otro'].map((x) => <option key={x}>{x}</option>)}</select></label>
-                <label>Resultado<select value={call.outcome} onChange={(e) => setCall({ ...call, outcome: e.target.value })}>{['No respondió','Buzón de voz','Número incorrecto','Recepción','Respondió','Solicitó información','Interesado','Seguimiento','Reunión agendada','No interesado','No califica','Venta'].map((x) => <option key={x}>{x}</option>)}</select></label>
-                <label>Persona contactada<input value={call.contact_name} onChange={(e) => setCall({ ...call, contact_name: e.target.value })} /></label>
-                <label>Cargo<input value={call.contact_title} onChange={(e) => setCall({ ...call, contact_title: e.target.value })} /></label>
-                <label>Próxima fecha<input type="date" value={call.followup_date} onChange={(e) => setCall({ ...call, followup_date: e.target.value })} /></label>
-                <label>Venta atribuida ($)<input type="number" min="0" step="0.01" value={call.sale_amount} onChange={(e) => setCall({ ...call, sale_amount: e.target.value })} /></label>
-              </div>
-              <label>Objeción<input value={call.objection} onChange={(e) => setCall({ ...call, objection: e.target.value })} /></label>
-              <label>Notas<textarea rows="4" value={call.notes} onChange={(e) => setCall({ ...call, notes: e.target.value })} /></label>
-              <label>Próximo paso<input value={call.next_step} onChange={(e) => setCall({ ...call, next_step: e.target.value })} /></label>
-              <label className="check-row"><input type="checkbox" checked={call.appointment_booked} onChange={(e) => setCall({ ...call, appointment_booked: e.target.checked })} />Se agendó una reunión</label>
-              <button className="button primary full" onClick={saveCall} disabled={saving}><CalendarClock size={17} />{saving ? 'Registrando…' : 'Registrar contacto'}</button>
-            </>
+            <ContactComposer
+              key={`${lead.id}-${lead.updated_at}`}
+              initialChannel={lead.whatsapp_url ? 'WhatsApp' : 'Llamada'}
+              saving={saving}
+              onSubmit={saveContact}
+              submitLabel="Guardar actividad"
+            />
           )}
 
           {tab === 'history' && (
             <div className="timeline">
-              {(lead.call_logs || []).length === 0 && <p className="muted">Todavía no hay contactos registrados.</p>}
+              {(lead.call_logs || []).length === 0 && <p className="muted">Todavía no hay actividades registradas.</p>}
               {(lead.call_logs || []).map((item) => (
                 <article key={item.id}>
                   <span className="timeline-dot" />
-                  <div><strong>{item.channel} · {item.outcome}</strong><small>{new Date(item.occurred_at).toLocaleString('es-PA')}</small><p>{item.notes || item.next_step || 'Sin notas'}</p></div>
+                  <div>
+                    <strong>{item.channel} · {item.outcome}</strong>
+                    <small>{new Date(item.occurred_at).toLocaleString('es-PA')} · {conversationLabel(item.conversation_status)} · {outcomeStageLabel(item.outcome_stage)}</small>
+                    <p>{item.notes || item.next_step || item.transcript || 'Sin notas'}</p>
+                  </div>
                 </article>
               ))}
             </div>
