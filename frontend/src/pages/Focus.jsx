@@ -3,6 +3,7 @@ import {
   AlarmClock,
   ArrowRight,
   BrainCircuit,
+  CalendarDays,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
@@ -11,6 +12,7 @@ import {
   Phone,
   RefreshCw,
   RotateCcw,
+  Search,
   Sparkles,
   Target,
 } from 'lucide-react';
@@ -30,26 +32,54 @@ function localISODate(daysFromToday = 0) {
   return `${year}-${month}-${day}`;
 }
 
+function formatWorkDate(value) {
+  if (!value) return 'Sin fecha';
+  const [year, month, day] = String(value).slice(0, 10).split('-').map(Number);
+  if (!year || !month || !day) return String(value);
+  return new Date(year, month - 1, day).toLocaleDateString('es-PA', {
+    weekday: 'short',
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+  });
+}
+
 function whatsappLink(lead) {
   if (lead.whatsapp_url) return lead.whatsapp_url;
   const digits = String(lead.whatsapp_phone || lead.phone || '').replace(/\D/g, '');
   return digits ? `https://wa.me/${digits}` : '';
 }
 
+function followupReason(lead) {
+  return lead.followup_reason
+    || lead.next_step
+    || lead.outcome
+    || lead.notes
+    || 'Retomar la conversación y definir el próximo paso.';
+}
+
 const bucketOptions = [
-  ['priority', 'Prioridades'],
-  ['active', 'Respondieron'],
+  ['new', 'Nuevos'],
   ['followups', 'Seguimientos'],
   ['waiting', 'Esperando'],
+  ['active', 'Conversaciones activas'],
 ];
 
 export default function Focus() {
   const { profile } = useAuth();
   const [queue, setQueue] = useState([]);
   const [diagnoseTasks, setDiagnoseTasks] = useState([]);
-  const [summary, setSummary] = useState({ total: 0, overdue: 0, due_today: 0, unassigned: 0 });
+  const [summary, setSummary] = useState({
+    total: 0,
+    new_leads: 0,
+    active_conversations: 0,
+    waiting_responses: 0,
+    followups: 0,
+  });
   const [scope, setScope] = useState('mine');
-  const [bucket, setBucket] = useState('priority');
+  const [bucket, setBucket] = useState('new');
+  const [followupDate, setFollowupDate] = useState(() => localISODate(0));
+  const [followupSearch, setFollowupSearch] = useState('');
   const [profiles, setProfiles] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -61,12 +91,18 @@ export default function Focus() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  const load = async (nextScope = scope, nextBucket = bucket) => {
+  const load = async (nextScope = scope, nextBucket = bucket, nextFollowupDate = followupDate) => {
     setLoading(true);
     setError('');
     try {
+      const focusParams = new URLSearchParams({
+        scope: nextScope,
+        bucket: nextBucket,
+        limit: '200',
+        work_date: nextFollowupDate,
+      });
       const [focusData, taskData, profileRows, config] = await Promise.all([
-        api(`/api/focus?scope=${nextScope}&bucket=${nextBucket}&limit=100`),
+        api(`/api/focus?${focusParams.toString()}`),
         api(`/api/focus/diagnose-tasks?scope=${nextScope}&limit=20`),
         profiles.length ? Promise.resolve(profiles) : api('/api/profiles'),
         statuses.length ? Promise.resolve({ statuses }) : api('/api/config'),
@@ -83,7 +119,7 @@ export default function Focus() {
     }
   };
 
-  useEffect(() => { load('mine', 'priority'); }, []);
+  useEffect(() => { load('mine', 'new', localISODate(0)); }, []);
 
   useEffect(() => {
     document.body.classList.toggle('focus-sheet-open', showLog);
@@ -98,24 +134,43 @@ export default function Focus() {
     return () => window.clearTimeout(timer);
   }, [success]);
 
-  const current = queue[0] || null;
+  const current = bucket === 'followups' ? null : (queue[0] || null);
   const wa = current ? whatsappLink(current) : '';
   const progressText = summary.total
     ? `${Math.max(1, summary.total - queue.length + 1)} de ${summary.total}`
     : '0 de 0';
   const focusReasons = useMemo(() => current?.priority_reasons || [], [current]);
+  const visibleFollowups = useMemo(() => {
+    const term = followupSearch.trim().toLocaleLowerCase('es');
+    if (!term) return queue;
+    return queue.filter((lead) => [
+      lead.business_name,
+      lead.address,
+      lead.outcome,
+      lead.notes,
+      lead.followup_reason,
+      lead.owner_name,
+    ].some((value) => String(value || '').toLocaleLowerCase('es').includes(term)));
+  }, [queue, followupSearch]);
 
   const changeScope = (value) => {
     setScope(value);
     setSuccess('');
-    load(value, bucket);
+    load(value, bucket, followupDate);
   };
 
   const changeBucket = (value) => {
     setBucket(value);
     setSuccess('');
     setShowLog(false);
-    load(scope, value);
+    load(scope, value, followupDate);
+  };
+
+  const changeFollowupDate = (value) => {
+    const nextDate = value || localISODate(0);
+    setFollowupDate(nextDate);
+    setSuccess('');
+    if (bucket === 'followups') load(scope, 'followups', nextDate);
   };
 
   const rotate = () => {
@@ -149,8 +204,10 @@ export default function Focus() {
         body: JSON.stringify(payload),
       });
       const message = payload.activity_type === 'response_received'
-        ? 'Respuesta guardada. Focus actualizó la conversación y seleccionó la siguiente acción.'
-        : 'Acción guardada. El lead queda esperando respuesta y puedes seguir trabajando.';
+        ? 'Respuesta guardada. El lead pasó a Conversaciones activas y Aura definió el siguiente paso.'
+        : bucket === 'new'
+          ? 'Primer contacto guardado. El lead pasó a Esperando.'
+          : 'Acción guardada. Focus actualizó la conversación y el próximo seguimiento.';
       removeCurrent(message);
     } catch (e) {
       setError(e.message);
@@ -200,17 +257,83 @@ export default function Focus() {
   };
 
   const bucketCount = (key) => ({
-    priority: summary.priorities || 0,
+    new: summary.new_leads || 0,
     active: summary.active_conversations || 0,
     followups: summary.followups || 0,
     waiting: summary.waiting_responses || 0,
   }[key]);
 
+  const renderFollowups = () => (
+    <section className="panel focus-followup-panel">
+      <header className="focus-followup-header">
+        <div>
+          <p className="eyebrow">SEGUIMIENTOS DEL DÍA</p>
+          <h2>{formatWorkDate(followupDate)}</h2>
+          <p>Solo aparecen los leads programados para esta fecha.</p>
+        </div>
+        <strong>{visibleFollowups.length}</strong>
+      </header>
+
+      <div className="focus-followup-toolbar">
+        <label className="focus-followup-search">
+          <Search size={17} />
+          <input
+            value={followupSearch}
+            onChange={(event) => setFollowupSearch(event.target.value)}
+            placeholder="Buscar por nombre"
+          />
+        </label>
+        <label className="focus-followup-date-filter">
+          <CalendarDays size={17} />
+          <span>Fecha</span>
+          <input
+            type="date"
+            value={followupDate}
+            onChange={(event) => changeFollowupDate(event.target.value)}
+          />
+        </label>
+        {followupDate !== localISODate(0) && (
+          <button type="button" className="button secondary" onClick={() => changeFollowupDate(localISODate(0))}>
+            Volver a hoy
+          </button>
+        )}
+      </div>
+
+      {visibleFollowups.length === 0 ? (
+        <EmptyState
+          title={followupSearch ? 'No encontramos ese lead' : 'No hay seguimientos para esta fecha'}
+          text={followupSearch
+            ? 'Prueba con otra parte del nombre o limpia la búsqueda.'
+            : 'Cambia la fecha para revisar otro día.'}
+        />
+      ) : (
+        <div className="focus-followup-grid">
+          {visibleFollowups.map((lead) => (
+            <article key={lead.id} className="focus-followup-card">
+              <button type="button" className="focus-followup-main" onClick={() => setSelected(lead.id)}>
+                <span className="focus-followup-icon"><AlarmClock size={19} /></span>
+                <span className="focus-followup-copy">
+                  <small>{formatWorkDate(lead.next_followup_date)}</small>
+                  <strong>{lead.business_name}</strong>
+                  <p>{followupReason(lead)}</p>
+                </span>
+                <span className="focus-followup-meta">
+                  <b>{lead.status || 'Seguimiento'}</b>
+                  <small>{lead.owner_name || 'Sin asignar'}</small>
+                </span>
+              </button>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+
   return (
     <>
       <PageHeader
         title="Hoy"
-        description="Trabaja varias conversaciones sin cerrarlas antes de tiempo: cada acción se guarda y el outcome evoluciona con la respuesta."
+        description="Trabaja nuevos leads, seguimientos del día, primeros contactos en espera y conversaciones que ya recibieron respuesta."
         actions={(
           <>
             {profile?.role === 'admin' && (
@@ -233,10 +356,10 @@ export default function Focus() {
       </nav>
 
       <section className="focus-summary-grid async-summary">
+        <div><span>Nuevos</span><strong>{summary.new_leads || 0}</strong></div>
+        <div><span>Seguimientos del día</span><strong>{summary.followups || 0}</strong></div>
+        <div><span>Esperando primer contacto</span><strong>{summary.waiting_responses || 0}</strong></div>
         <div><span>Conversaciones activas</span><strong>{summary.active_conversations || 0}</strong></div>
-        <div><span>Esperando respuesta</span><strong>{summary.waiting_responses || 0}</strong></div>
-        <div><span>Seguimientos</span><strong>{summary.followups || 0}</strong></div>
-        <div><span>Vencidas</span><strong>{summary.overdue || 0}</strong></div>
       </section>
 
       {error && <div className="form-error page-error">{error}</div>}
@@ -260,10 +383,12 @@ export default function Focus() {
       )}
 
       {loading ? (
-        <section className="panel focus-loading"><Sparkles size={22} />Focus está ordenando tus prioridades…</section>
+        <section className="panel focus-loading"><Sparkles size={22} />Focus está organizando la cola de trabajo…</section>
+      ) : bucket === 'followups' ? (
+        renderFollowups()
       ) : !current ? (
         <section className="panel focus-empty">
-          <EmptyState title="Esta bandeja está al día" text="No hay otra acción en esta vista. Cambia de bandeja o actualiza la cola." />
+          <EmptyState title="Esta bandeja está al día" text="No hay otro lead en esta vista. Cambia de bandeja o actualiza la cola." />
           <button className="button primary" onClick={() => load()}><RotateCcw size={16} />Revisar nuevamente</button>
         </section>
       ) : (
@@ -308,8 +433,8 @@ export default function Focus() {
             <div className="focus-primary-actions async-actions">
               {current.phone && <a className="focus-action call" href={`tel:${current.phone}`}><Phone size={21} /><span>Llamar ahora</span><small>{current.phone}</small></a>}
               {wa && <a className="focus-action whatsapp" href={wa} target="_blank" rel="noreferrer"><MessageCircle size={21} /><span>Abrir WhatsApp</span><small>Contactar por mensaje</small></a>}
-              <button className="focus-action log" onClick={() => openLog('action')}><ArrowRight size={21} /><span>Registrar envío</span><small>Guardar y seguir con otro lead</small></button>
-              <button className="focus-action response" onClick={() => openLog('response')}><MessageCircle size={21} /><span>Registrar respuesta</span><small>Analizar y actualizar outcome</small></button>
+              <button className="focus-action log" onClick={() => openLog('action')}><ArrowRight size={21} /><span>Registrar envío</span><small>{bucket === 'new' ? 'Guardar y mover a Esperando' : 'Guardar y actualizar el seguimiento'}</small></button>
+              <button className="focus-action response" onClick={() => openLog('response')}><MessageCircle size={21} /><span>Registrar respuesta</span><small>Analizar y mover a Conversaciones activas</small></button>
             </div>
 
             <div className="focus-secondary-actions">
@@ -350,7 +475,7 @@ export default function Focus() {
           statuses={statuses}
           profiles={profiles}
           onClose={() => setSelected(null)}
-          onChanged={() => load()}
+          onChanged={() => load(scope, bucket, followupDate)}
         />
       )}
     </>

@@ -1,0 +1,21 @@
+AURA OS · FIX HOY V4
+Fecha: 29/07/2026
+
+CAMBIOS
+1. Se elimina la bandeja "Prioridades".
+2. "Nuevos" muestra únicamente leads con estado Nuevo, sin contactos previos.
+3. El primer contacto saliente entra automáticamente en "Esperando".
+4. "Esperando" contiene solamente leads después del primer contacto y antes de su seguimiento.
+5. "Conversaciones activas" contiene leads que ya respondieron.
+6. "Seguimientos" muestra una lista de los leads programados para la fecha seleccionada.
+7. Seguimientos permite buscar por nombre y cambiar la fecha.
+8. Cada seguimiento muestra fecha, negocio, motivo, estado y responsable.
+9. No requiere SQL ni migraciones.
+
+ARCHIVOS
+backend/app/main.py
+frontend/src/pages/Focus.jsx
+frontend/src/styles.css
+
+INSTALACIÓN
+Sube la carpeta aura-os-main al repositorio conservando las rutas y reemplazando los archivos existentes.

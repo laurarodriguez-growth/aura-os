@@ -1301,10 +1301,12 @@ def step_search_job(
 def aura_focus(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     scope: str = Query(default="mine", pattern="^(mine|all)$"),
-    bucket: str = Query(default="priority", pattern="^(priority|active|waiting|followups)$"),
+    bucket: str = Query(default="new", pattern="^(new|priority|active|waiting|followups)$"),
+    work_date: date | None = None,
     limit: int = Query(default=100, ge=1, le=200),
 ) -> dict[str, Any]:
     today = panama_today()
+    selected_date = work_date or today
     leads = _fetch_all("leads")
     profiles = _profile_map()
     all_items: list[dict[str, Any]] = []
@@ -1318,58 +1320,92 @@ def aura_focus(
         if not enriched:
             continue
         enriched["owner_name"] = profiles.get(owner_id, "Sin asignar") if owner_id else "Sin asignar"
+        enriched["followup_reason"] = (
+            lead.get("next_step")
+            or lead.get("outcome")
+            or lead.get("notes")
+            or enriched.get("recommended_action")
+            or "Retomar la conversación y definir el próximo paso."
+        )
         all_items.append(enriched)
 
-    active_items = [item for item in all_items if item.get("conversation_status") in ACTIVE_CONVERSATION_STATUSES]
-    waiting_items = [item for item in all_items if item.get("conversation_status") == "waiting_response"]
-    followup_items = [item for item in all_items if item.get("due_state") in {"overdue", "today"} or item.get("response_due_state") in {"overdue", "today"}]
-    priority_items = [
+    new_items = [
         item for item in all_items
-        if not (
-            item.get("conversation_status") == "waiting_response"
-            and item.get("response_due_state") not in {"overdue", "today"}
-            and item.get("due_state") not in {"overdue", "today"}
-        )
-        and not (
-            item.get("contacted_today")
-            and item.get("conversation_status") not in ACTIVE_CONVERSATION_STATUSES
-            and item.get("due_state") not in {"overdue", "today"}
-            and item.get("response_due_state") not in {"overdue", "today"}
-        )
+        if str(item.get("status") or "") == "Nuevo"
+        and int(item.get("contact_attempts") or 0) == 0
+        and str(item.get("conversation_status") or "not_started") == "not_started"
     ]
 
+    active_items = [
+        item for item in all_items
+        if item.get("conversation_status") in ACTIVE_CONVERSATION_STATUSES
+    ]
+
+    followup_items = [
+        item for item in all_items
+        if _parse_date(item.get("next_followup_date")) == selected_date
+        and item.get("conversation_status") not in ACTIVE_CONVERSATION_STATUSES
+    ]
+
+    waiting_items = [
+        item for item in all_items
+        if item.get("conversation_status") == "waiting_response"
+        and int(item.get("contact_attempts") or 0) == 1
+        and _parse_date(item.get("next_followup_date")) != today
+        and item.get("response_due_state") not in {"overdue", "today"}
+    ]
+
+    # Compatibilidad durante despliegues: una versión anterior del frontend puede pedir "priority".
+    if bucket == "priority":
+        bucket = "new"
+
     bucket_map = {
-        "priority": priority_items,
+        "new": new_items,
         "active": active_items,
         "waiting": waiting_items,
         "followups": followup_items,
     }
     items = bucket_map[bucket]
-    items.sort(
-        key=lambda item: (
-            int(item.get("priority_score") or 0),
+
+    if bucket == "followups":
+        items.sort(key=lambda item: (
+            str(item.get("next_followup_date") or ""),
+            str(item.get("business_name") or "").lower(),
+        ))
+    elif bucket == "waiting":
+        items.sort(key=lambda item: (
+            str(item.get("waiting_since") or item.get("last_outbound_at") or item.get("updated_at") or ""),
             int(item.get("final_score") or 0),
-            str(item.get("updated_at") or ""),
-        ),
-        reverse=True,
-    )
+        ))
+    elif bucket == "active":
+        items.sort(key=lambda item: (
+            str(item.get("last_inbound_at") or item.get("updated_at") or ""),
+            int(item.get("priority_score") or 0),
+        ), reverse=True)
+    else:
+        items.sort(key=lambda item: (
+            int(item.get("final_score") or 0),
+            str(item.get("created_at") or ""),
+        ), reverse=True)
+
     total = len(items)
     selected = items[:limit]
     return {
         "items": selected,
         "total": total,
-        "overdue": sum(1 for item in all_items if item.get("due_state") == "overdue" or item.get("response_due_state") == "overdue"),
-        "due_today": sum(1 for item in all_items if item.get("due_state") == "today" or item.get("response_due_state") == "today"),
+        "overdue": sum(1 for item in all_items if item.get("due_state") == "overdue"),
+        "due_today": sum(1 for item in all_items if item.get("due_state") == "today"),
         "unassigned": sum(1 for item in all_items if not item.get("owner_id")),
+        "new_leads": len(new_items),
+        "priorities": len(new_items),
         "active_conversations": len(active_items),
         "waiting_responses": len(waiting_items),
         "followups": len(followup_items),
-        "priorities": len(priority_items),
+        "followup_date": selected_date.isoformat(),
         "bucket": bucket,
         "scope": "all" if user.role == "admin" and scope == "all" else "mine",
         "generated_at": datetime.now(PANAMA_TZ).isoformat(),
     }
-
 
 @app.get("/api/leads/view-counts")
 def lead_view_counts(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, int]:
@@ -1611,8 +1647,18 @@ def create_call_log(
     outcome_name = outcome_definition.get("name") if outcome_definition else payload.outcome
     outcome_id = (outcome_definition.get("id") if outcome_definition else payload.outcome_id) or None
 
+    first_outbound_wait = (
+        int(lead.get("contact_attempts") or 0) == 0
+        and _counts_as_contact_attempt(payload)
+        and payload.conversation_status in {"not_started", "waiting_response"}
+    )
+
     conversation_status = payload.conversation_status
-    if outcome_definition and outcome_definition.get("is_terminal"):
+    if first_outbound_wait:
+        # El primer contacto saliente entra siempre en Esperando hasta que haya respuesta
+        # o llegue la fecha programada de seguimiento.
+        conversation_status = "waiting_response"
+    elif outcome_definition and outcome_definition.get("is_terminal"):
         conversation_status = "closed"
     elif conversation_status == "not_started" and outcome_definition and outcome_definition.get("recommended_conversation_status"):
         conversation_status = outcome_definition["recommended_conversation_status"]
