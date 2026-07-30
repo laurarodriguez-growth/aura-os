@@ -37,7 +37,6 @@ const executionLinks = [
 const adminLinks = [
   { to: '/pipeline', label: 'Pipeline comercial', icon: Target },
   { to: '/performance', label: 'Rendimiento', icon: BarChart3 },
-  { to: '/aura-backlog', label: 'Backlog de Aura', icon: BrainCircuit },
   { to: '/exports', label: 'Exportaciones', icon: Download },
 ];
 

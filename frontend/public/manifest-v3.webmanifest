@@ -1,0 +1,38 @@
+{
+  "name": "Aura OS · Aura Grow",
+  "short_name": "Aura OS",
+  "description": "Copiloto comercial para generar, priorizar y trabajar leads.",
+  "lang": "es",
+  "start_url": "./#/focus",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#090b0a",
+  "theme_color": "#090b0a",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "./icons/aura-os-app-v3-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/aura-os-app-v3-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "./icons/aura-os-maskable-v3-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "./icons/aura-os-maskable-v3-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

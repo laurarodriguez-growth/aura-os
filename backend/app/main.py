@@ -11,12 +11,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .auditor import audit_website
-from .aura_backlog import (
-    admin_router as aura_backlog_admin_router,
-    mark_analysis_source_and_capture_result,
-    record_analysis,
-    usage_router as aura_backlog_usage_router,
-)
 from .auth import CurrentUser, get_current_user, require_admin, user_feature_enabled
 from .chat_analysis import analyze_chat
 from .config import get_settings
@@ -55,8 +49,6 @@ app.add_middleware(
 
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
-app.include_router(aura_backlog_admin_router)
-app.include_router(aura_backlog_usage_router)
 
 
 STATUSES = [
@@ -1877,39 +1869,12 @@ def chat_analysis(
     payload: ChatAnalysisRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    if payload.lead_id:
-        lead = _first(
-            get_supabase().table("leads")
-            .select("id,owner_id")
-            .eq("id", payload.lead_id)
-            .limit(1)
-            .execute()
-        )
-        if not lead:
-            raise HTTPException(status_code=404, detail="Lead no encontrado")
-        _assert_lead_work_access(lead, user)
-
-    result = analyze_chat(
+    return analyze_chat(
         payload.transcript,
         channel=payload.channel,
         today=panama_today(),
         setter_name=user.full_name,
     )
-    backlog_case = record_analysis(
-        lead_id=payload.lead_id,
-        user=user,
-        analysis=result,
-    )
-    if backlog_case and backlog_case.get("id"):
-        result["backlog_id"] = backlog_case["id"]
-        result["backlog_saved"] = True
-    else:
-        result["backlog_saved"] = False
-        result["backlog_warning"] = (
-            "El análisis funciona, pero el Backlog todavía no pudo guardarlo. "
-            "La administradora debe instalar database/18_aura_learning_backlog.sql."
-        )
-    return result
 
 
 @app.post("/api/leads/{lead_id}/call-logs")
@@ -2088,24 +2053,6 @@ def create_call_log(
         }
     if lead_update_warning:
         call["save_warning"] = lead_update_warning
-
-    analysis_backlog_id = str((payload.analysis or {}).get("backlog_id") or "") or None
-    mark_analysis_source_and_capture_result(
-        lead_id=lead_id,
-        current_backlog_id=analysis_backlog_id,
-        call_log=call,
-        result_payload={
-            "activity_type": payload.activity_type,
-            "direction": payload.direction,
-            "channel": payload.channel,
-            "outcome": outcome_name,
-            "conversation_status": conversation_status,
-            "commercial_status": commercial_status or lead_update.get("status") or lead.get("status"),
-            "appointment_booked": payload.appointment_booked,
-            "sale_amount": payload.sale_amount,
-            "followup_date": row.get("followup_date"),
-        },
-    )
     return call
 
 

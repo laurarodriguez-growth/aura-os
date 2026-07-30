@@ -611,7 +611,6 @@ export default function Focus() {
                 <header><div><p className="eyebrow">REGISTRO ASÍNCRONO</p><h3>{logMode === 'response' ? 'Actualizar conversación' : 'Guardar acción'}</h3></div><button className="icon-button" onClick={() => setShowLog(false)}>×</button></header>
                 <ContactComposer
                   key={`${current.id}-${logMode}`}
-                  leadId={current.id}
                   initialMode={logMode}
                   initialChannel={current.recommended_channel || 'Llamada'}
                   saving={saving}

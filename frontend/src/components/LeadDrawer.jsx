@@ -298,7 +298,6 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
           {tab === 'contact' && (
             <ContactComposer
               key={`${lead.id}-${lead.updated_at}`}
-              leadId={lead.id}
               initialChannel={lead.whatsapp_url ? 'WhatsApp' : 'Llamada'}
               saving={saving}
               onSubmit={saveContact}

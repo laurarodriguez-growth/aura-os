@@ -1423,8 +1423,6 @@ def _default_result(channel: str | None, today: date, scope: str = "", setter_na
     return {
         "method": "aura_setter_playbook_v3",
         "library_version": "2026.07.29.5",
-        "playbook_version": "2026.07.29.5",
-        "rule_key": "response",
         "confidence": 48,
         "summary": "Hubo respuesta, pero Aura no detectó una intención comercial suficientemente explícita.",
         "recommended_reply": _personalize_setter_text("Gracias por responder 😊 Para orientarme correctamente, ¿usted supervisa el seguimiento de las consultas por WhatsApp o debería conversar con otra persona?", setter_name),
@@ -1492,13 +1490,10 @@ def analyze_chat(
     if len(normalized) < 2:
         empty = _default_result(channel, current_date, scope, setter_name)
         empty.update({
-            "rule_key": "insufficient_text",
             "confidence": 0,
             "summary": "No hay suficiente texto para analizar.",
             "recommended_reply": "",
             "reasoning": "Pega una respuesta, un resumen o el TXT del chat para que Aura pueda proponer qué decir y cómo clasificarlo.",
-            "lead_message": scope[:10000],
-            "previous_context": previous_agent_message[:10000],
         })
         return empty
 
@@ -1554,12 +1549,7 @@ def analyze_chat(
                 break
 
     if not matches:
-        default = _default_result(channel, current_date, scope, setter_name)
-        default.update({
-            "lead_message": scope[:10000],
-            "previous_context": previous_agent_message[:10000],
-        })
-        return default
+        return _default_result(channel, current_date, scope, setter_name)
 
     matches.sort(key=lambda item: (-int(item["priority"]), int(item["order"])))
     primary = matches[0]
@@ -1609,16 +1599,12 @@ def analyze_chat(
     return {
         "method": "aura_setter_playbook_v3",
         "library_version": "2026.07.29.5",
-        "playbook_version": "2026.07.29.5",
-        "rule_key": primary["key"],
         "confidence": confidence,
         "summary": summary,
         "recommended_reply": _personalize_setter_text(primary["recommended_reply"], setter_name),
         "reasoning": _personalize_setter_text(primary["reasoning"], setter_name),
         "signals": clean_signals,
         "analysis_scope": scope[:500],
-        "lead_message": scope[:10000],
-        "previous_context": previous_agent_message[:10000],
         "classification": {
             "commercial_status": primary["commercial_status"],
             "conversation_status": primary["conversation_status"],

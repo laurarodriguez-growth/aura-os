@@ -159,7 +159,6 @@ function mergeAnalysisResults(remoteResult, localResult) {
 }
 
 export default function ContactComposer({
-  leadId,
   initialChannel = 'Llamada',
   initialMode = 'action',
   saving = false,
@@ -298,13 +297,6 @@ export default function ContactComposer({
     try {
       await copyToClipboard(reply);
       setCopiedReply(true);
-      if (analysis?.backlog_id) {
-        api(`/api/aura-backlog/${analysis.backlog_id}/suggestion-used`, {
-          method: 'POST',
-        }).catch(() => {
-          // El setter puede seguir trabajando aunque la telemetría no esté disponible.
-        });
-      }
       window.setTimeout(() => setCopiedReply(false), 2200);
     } catch (_) {
       setError('No pude copiar automáticamente. Mantén presionado el texto para copiarlo.');
@@ -321,11 +313,7 @@ export default function ContactComposer({
     try {
       const result = await api('/api/chat-analysis', {
         method: 'POST',
-        body: JSON.stringify({
-          transcript: form.transcript,
-          channel: form.channel,
-          lead_id: leadId || null,
-        }),
+        body: JSON.stringify({ transcript: form.transcript, channel: form.channel }),
       });
       storeAnalysisResult(result);
     } catch (_) {
