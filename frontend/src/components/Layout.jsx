@@ -30,13 +30,14 @@ const executionLinks = [
   { to: '/focus', label: 'Hoy', icon: ListTodo },
   { to: '/finder', label: 'Generar leads', icon: Search },
   { to: '/leads', label: 'Base de leads', icon: Database },
-  { to: '/pipeline', label: 'Pipeline', icon: Target },
   { to: '/followups', label: 'Seguimientos', icon: BellRing },
   { to: '/call-log', label: 'Call Log', icon: PhoneCall },
 ];
 
 const adminLinks = [
+  { to: '/pipeline', label: 'Pipeline comercial', icon: Target },
   { to: '/performance', label: 'Rendimiento', icon: BarChart3 },
+  { to: '/aura-backlog', label: 'Backlog de Aura', icon: BrainCircuit },
   { to: '/exports', label: 'Exportaciones', icon: Download },
 ];
 
@@ -68,6 +69,7 @@ export default function Layout({ children }) {
   const { profile, signOut } = useAuth();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return window.localStorage.getItem('aura-sidebar-collapsed') === 'true';
@@ -76,17 +78,46 @@ export default function Layout({ children }) {
     }
   });
 
-  const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
+  const firstName = profile?.full_name?.split(' ')[0] || 'Usuario';
   const isAdmin = profile?.role === 'admin';
   const diagnoseEnabled = profile?.features?.diagnose === true;
   const diagnoseMode = diagnoseEnabled && location.pathname.startsWith('/diagnose');
 
   const closeMobile = () => setMobileOpen(false);
+  const closeAccount = () => setAccountOpen(false);
+  const openMainMenu = () => {
+    closeAccount();
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      setMobileOpen(true);
+      return;
+    }
+    setCollapsed((current) => !current);
+  };
+  const toggleAccount = () => {
+    closeMobile();
+    setAccountOpen((current) => !current);
+  };
+  const handleSignOut = async () => {
+    closeMobile();
+    closeAccount();
+    await signOut();
+  };
   const toggleCollapsed = () => setCollapsed((current) => !current);
 
   useEffect(() => {
     closeMobile();
+    closeAccount();
   }, [location.pathname]);
+
+  useEffect(() => {
+    const compactViewport = window.matchMedia('(max-width: 900px)').matches;
+    const shouldLock = compactViewport && (mobileOpen || accountOpen);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = shouldLock ? 'hidden' : previousOverflow;
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen, accountOpen]);
 
   useEffect(() => {
     try {
@@ -109,20 +140,60 @@ export default function Layout({ children }) {
 
   return (
     <div
-      className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'} ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'}`}
+      className={`app-shell ${diagnoseMode ? 'diagnose-mode' : 'focus-mode'} ${collapsed ? 'sidebar-collapsed' : 'sidebar-expanded'} ${mobileOpen ? 'mobile-menu-open' : ''} ${accountOpen ? 'mobile-account-open' : ''}`}
     >
-      <header className="mobile-header">
-        <button className="icon-button" onClick={() => setMobileOpen(true)} aria-label="Abrir menú">
-          <Menu />
+      <header className="mobile-header global-app-header">
+        <button
+          type="button"
+          className="mobile-menu-trigger global-menu-trigger"
+          onClick={openMainMenu}
+          aria-label="Abrir o compactar el menú principal"
+        >
+          <Menu size={22} aria-hidden="true" />
+          <span>Menú</span>
         </button>
         <div className="mobile-brand">
           <AuraLogo className="mobile-brand-logo" />
           <span>AURA GROW · {diagnoseMode ? 'DIAGNOSE' : 'FOCUS'}</span>
         </div>
-        <span className="avatar small">{firstName[0]}</span>
+        <button
+          type="button"
+          className="mobile-account-trigger global-account-trigger"
+          onClick={toggleAccount}
+          aria-label="Abrir opciones de cuenta"
+          aria-expanded={accountOpen}
+        >
+          <span className="avatar small">{firstName[0]}</span>
+        </button>
       </header>
 
       {mobileOpen && <button className="sidebar-backdrop" onClick={closeMobile} aria-label="Cerrar menú" />}
+
+      {accountOpen && (
+        <>
+          <button className="account-backdrop" onClick={closeAccount} aria-label="Cerrar opciones de cuenta" />
+          <section className="mobile-account-sheet global-account-panel" aria-label="Opciones de cuenta">
+            <div className="mobile-account-identity">
+              <span className="avatar">{firstName[0]}</span>
+              <div>
+                <strong>{profile?.full_name || 'Usuario'}</strong>
+                <small>{isAdmin ? 'Administradora' : 'Setter Focus'}</small>
+              </div>
+              <button type="button" className="icon-button" onClick={closeAccount} aria-label="Cerrar opciones de cuenta">
+                <X size={20} />
+              </button>
+            </div>
+            <NavLink to="/settings" className="mobile-account-action" onClick={closeAccount}>
+              <Settings size={20} />
+              <span>Mi cuenta</span>
+            </NavLink>
+            <button type="button" className="mobile-account-action danger" onClick={handleSignOut}>
+              <LogOut size={20} />
+              <span>Cerrar sesión</span>
+            </button>
+          </section>
+        </>
+      )}
 
       <aside className={`sidebar sidebar-v3 ${mobileOpen ? 'open' : ''}`} aria-label="Navegación principal">
         <div className="sidebar-top sidebar-top-v3">
@@ -224,10 +295,15 @@ export default function Layout({ children }) {
               <strong>{profile?.full_name || 'Usuario'}</strong>
               <small>{isAdmin ? 'Administradora' : 'Setter Focus'}</small>
             </div>
-            <button className="icon-button" onClick={signOut} title="Cerrar sesión" aria-label="Cerrar sesión">
+            <button className="icon-button desktop-only" onClick={handleSignOut} title="Cerrar sesión" aria-label="Cerrar sesión">
               <LogOut size={17} />
             </button>
           </div>
+
+          <button type="button" className="sidebar-signout-button mobile-only" onClick={handleSignOut}>
+            <LogOut size={19} />
+            <span>Cerrar sesión</span>
+          </button>
         </div>
       </aside>
 

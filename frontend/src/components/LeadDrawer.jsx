@@ -103,7 +103,10 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
       changeForm({ outcome_id: '', outcome: '' });
       return;
     }
-    const changes = { outcome_id: item.id, outcome: item.name };
+    const changes = {
+      outcome_id: item.is_local_fallback ? '' : item.id,
+      outcome: item.name,
+    };
     if (item.recommended_conversation_status) changes.conversation_status = item.recommended_conversation_status;
     if (item.recommended_commercial_status && statuses.includes(item.recommended_commercial_status)) {
       changes.status = item.recommended_commercial_status;
@@ -124,7 +127,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
       const payload = {
         ...form,
         owner_id: form.owner_id || null,
-        outcome_id: form.outcome_id || null,
+        outcome_id: String(form.outcome_id || '').startsWith('local:') ? null : (form.outcome_id || null),
         next_followup_date: form.next_followup_date || null,
         manual_ads_score: Number(form.manual_ads_score || 0),
         manual_volume_score: Number(form.manual_volume_score || 0),
@@ -295,6 +298,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
           {tab === 'contact' && (
             <ContactComposer
               key={`${lead.id}-${lead.updated_at}`}
+              leadId={lead.id}
               initialChannel={lead.whatsapp_url ? 'WhatsApp' : 'Llamada'}
               saving={saving}
               onSubmit={saveContact}

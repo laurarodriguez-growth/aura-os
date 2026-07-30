@@ -6,6 +6,7 @@ import LoadingScreen from './components/LoadingScreen';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
+import AuraBacklog from './pages/AuraBacklog';
 import Focus from './pages/Focus';
 import LeadFinder from './pages/LeadFinder';
 import Leads from './pages/Leads';
@@ -39,10 +40,11 @@ function ProtectedApp() {
         <Route path="/focus" element={<Focus />} />
         <Route path="/finder" element={<LeadFinder />} />
         <Route path="/leads" element={<Leads />} />
-        <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/pipeline" element={isAdmin ? <Pipeline /> : <Navigate to="/focus" replace />} />
         <Route path="/followups" element={<Followups />} />
         <Route path="/call-log" element={<CallLog />} />
         <Route path="/performance" element={isAdmin ? <Dashboard /> : <Navigate to="/focus" replace />} />
+        <Route path="/aura-backlog" element={isAdmin ? <AuraBacklog /> : <Navigate to="/focus" replace />} />
         <Route path="/dashboard" element={<Navigate to="/performance" replace />} />
         <Route path="/exports" element={isAdmin ? <Exports /> : <Navigate to="/focus" replace />} />
         <Route path="/settings" element={<Settings />} />

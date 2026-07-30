@@ -18,7 +18,8 @@ const detailViews = {
   saved: { label: 'Leads guardados', empty: 'No hay leads guardados con estos filtros.' },
   worked: { label: 'Leads trabajados', empty: 'Todavía no hay leads trabajados en este periodo.' },
   overdue: { label: 'Seguimientos vencidos', empty: 'No hay seguimientos vencidos.' },
-  contacts: { label: 'Detalle de contacto', empty: 'No hay actividad de contacto para analizar.' },
+  contacts_period: { label: 'Contactados del periodo', empty: 'No hay primeros contactos registrados en este periodo.' },
+  responses: { label: 'Conversión histórica', empty: 'Todavía no hay contactos verificables para medir respuesta.' },
   meetings: { label: 'Reuniones', empty: 'No hay reuniones registradas en este periodo.' },
   sales: { label: 'Ventas', empty: 'No hay ventas registradas en este periodo.' },
 };
@@ -61,6 +62,15 @@ function formatDate(value, withTime = false) {
   }).format(date);
 }
 
+function formatResponseTime(minutes) {
+  if (minutes === null || minutes === undefined || Number.isNaN(Number(minutes))) return 'Tiempo no disponible';
+  const total = Number(minutes);
+  if (total < 60) return `${Math.max(0, Math.round(total))} min`;
+  if (total < 1440) return `${Math.floor(total / 60)} h ${Math.round(total % 60)} min`;
+  const days = Math.floor(total / 1440);
+  return `${days} día${days === 1 ? '' : 's'}`;
+}
+
 function detailDate(row, view) {
   if (view === 'saved') return formatDate(row.capture_date);
   if (view === 'overdue') {
@@ -71,10 +81,14 @@ function detailDate(row, view) {
 }
 
 function DetailRow({ row, view, onOpen }) {
-  const contactLabel = view === 'contacts'
-    ? (row.contacted ? 'Contacto efectivo' : 'Sin contacto efectivo')
+  const responseLabel = view === 'responses'
+    ? (row.response_status || (row.responded ? 'Verificada' : 'Sin respuesta'))
     : null;
-  const value = view === 'sales' ? money(row.sale_amount) : detailDate(row, view);
+  const value = view === 'sales'
+    ? money(row.sale_amount)
+    : view === 'responses'
+      ? (row.verified_response ? formatResponseTime(row.response_time_minutes) : row.inferred_response ? 'Por normalizar' : 'En espera')
+      : detailDate(row, view);
 
   return (
     <button type="button" className="performance-detail-row" onClick={() => onOpen(row.lead_id)}>
@@ -89,17 +103,17 @@ function DetailRow({ row, view, onOpen }) {
       </span>
       <span>
         <strong className="performance-cell-label">Resultado</strong>
-        <b>{contactLabel || row.outcome || 'Sin outcome'}</b>
-        <small>{row.activity_count ? `${row.activity_count} actividad${row.activity_count === 1 ? '' : 'es'}` : row.channel || 'Sin canal'}</small>
+        <b>{responseLabel || row.outcome || 'Sin outcome'}</b>
+        <small>{view === 'responses' ? `${row.contact_verified ? 'Contacto verificado' : 'Contacto histórico'} · ${formatDate(row.first_contact_at, true)}` : (row.activity_count ? `${row.activity_count} actividad${row.activity_count === 1 ? '' : 'es'}` : row.channel || 'Sin canal')}</small>
       </span>
       <span>
         <strong className="performance-cell-label">Responsable</strong>
         <b>{row.agent_name || row.owner_name || 'Sin asignar'}</b>
-        <small>{row.next_followup_date ? `Próximo: ${formatDate(row.next_followup_date)}` : 'Sin próximo seguimiento'}</small>
+        <small>{view === 'responses' ? (row.attribution_verified ? 'Setter del primer contacto' : 'Atribución histórica') : (row.next_followup_date ? `Próximo: ${formatDate(row.next_followup_date)}` : 'Sin próximo seguimiento')}</small>
       </span>
       <span className="performance-value-cell">
         <strong>{value}</strong>
-        <small>Abrir ficha</small>
+        <small>{view === 'responses' && row.verified_response ? `Respuesta: ${formatDate(row.first_response_at, true)}` : 'Abrir ficha'}</small>
       </span>
     </button>
   );
@@ -115,6 +129,7 @@ export default function Dashboard() {
   const [selectedLead, setSelectedLead] = useState(null);
   const [detailStatus, setDetailStatus] = useState('');
   const [detailSearch, setDetailSearch] = useState('');
+  const [responseFilter, setResponseFilter] = useState('');
   const [filters, setFilters] = useState({
     period: 'all', date_from: '', date_to: '', agent_id: '', status: '', tier: '', outcome: '',
   });
@@ -152,6 +167,7 @@ export default function Dashboard() {
 
   const applyFilters = () => {
     setDetailStatus('');
+    setResponseFilter('');
     setAppliedFilters({ ...filters });
   };
 
@@ -159,20 +175,23 @@ export default function Dashboard() {
     const cleared = { period: 'all', date_from: '', date_to: '', agent_id: '', status: '', tier: '', outcome: '' };
     setFilters(cleared);
     setDetailStatus('');
+    setResponseFilter('');
     setAppliedFilters(cleared);
   };
 
   const chooseMetric = (view) => {
     setSelectedView(view);
     setDetailStatus('');
+    setResponseFilter('');
     window.requestAnimationFrame(() => {
       document.getElementById('performance-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   };
 
-  const choosePipelineStatus = (status) => {
-    setSelectedView('saved');
-    setDetailStatus(status);
+  const chooseResponseGroup = (group) => {
+    setSelectedView('responses');
+    setDetailStatus('');
+    setResponseFilter(group);
     window.requestAnimationFrame(() => {
       document.getElementById('performance-detail')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
@@ -183,13 +202,17 @@ export default function Dashboard() {
     const term = detailSearch.trim().toLowerCase();
     return rows.filter((row) => {
       if (detailStatus && row.status !== detailStatus) return false;
+      if (selectedView === 'responses' && responseFilter === 'verified' && !row.verified_response) return false;
+      if (selectedView === 'responses' && responseFilter === 'inferred' && !row.inferred_response) return false;
+      if (selectedView === 'responses' && responseFilter === 'without_response' && row.verified_response) return false;
+      if (selectedView === 'responses' && responseFilter === 'over_24h' && !row.over_24h) return false;
       if (!term) return true;
       return [row.business_name, row.zone, row.status, row.tier, row.outcome, row.owner_name, row.agent_name]
         .some((value) => String(value || '').toLowerCase().includes(term));
     });
-  }, [data, selectedView, detailSearch, detailStatus]);
+  }, [data, selectedView, detailSearch, detailStatus, responseFilter]);
 
-  const firstName = profile?.full_name?.split(' ')[0] || 'Laura';
+  const firstName = profile?.full_name?.split(' ')[0] || 'Usuario';
   const statuses = data?.filter_options?.statuses || [];
   const profiles = data?.filter_options?.profiles || [];
   const maxActivity = Math.max(1, ...(data?.activity_by_day || []).map((item) => Number(item.count || 0)));
@@ -212,7 +235,7 @@ export default function Dashboard() {
 
       <section className="panel performance-filter-panel">
         <div className="performance-filter-heading">
-          <div><Filter size={18} /><div><strong>Filtros del reporte</strong><small>El periodo controla altas y actividades. Los vencidos siempre reflejan la cartera actual.</small></div></div>
+          <div><Filter size={18} /><div><strong>Filtros del reporte</strong><small>El periodo controla la actividad. La conversión histórica usa contactos y respuestas verificadas, atribuidos al setter del primer contacto.</small></div></div>
           <button type="button" className="text-button" onClick={clearFilters}>Limpiar filtros</button>
         </div>
         <div className="performance-filter-grid">
@@ -258,29 +281,50 @@ export default function Dashboard() {
       {error && <div className="form-error page-error">{error}</div>}
       {loading && !data ? <div className="panel skeleton-panel">Cargando reporte en vivo…</div> : data && (
         <>
+          <div className="performance-section-heading">
+            <div><p className="eyebrow">ACTIVIDAD DEL PERIODO</p><h2>Qué se trabajó</h2></div>
+            <small>Controlado por el periodo seleccionado</small>
+          </div>
           <section className="metrics-grid performance-metrics-grid">
             <MetricCard active={selectedView === 'saved'} onClick={() => chooseMetric('saved')} label="Leads guardados" value={data.total_leads} note={`${data.tier_a} Tier A · ${data.tier_b} Tier B`} icon={Database} />
             <MetricCard active={selectedView === 'worked'} onClick={() => chooseMetric('worked')} label="Leads trabajados" value={data.worked_leads} note={`${data.contact_activities} actividades registradas`} icon={UsersRound} />
+            <MetricCard active={selectedView === 'contacts_period'} onClick={() => chooseMetric('contacts_period')} label="Contactados" value={data.contacted_period ?? 0} note={`${data.responded_period ?? 0} respondieron en el periodo`} icon={PhoneCall} />
             <MetricCard active={selectedView === 'overdue'} onClick={() => chooseMetric('overdue')} label="Seguimientos vencidos" value={data.followups_due} note="Acciones que requieren atención" icon={CalendarClock} />
-            <MetricCard active={selectedView === 'contacts'} onClick={() => chooseMetric('contacts')} label="Tasa de contacto" value={`${data.contact_rate}%`} note={`${data.connected} contactos efectivos`} icon={PhoneCall} />
             <MetricCard active={selectedView === 'meetings'} onClick={() => chooseMetric('meetings')} label="Reuniones" value={data.meetings} note={`${data.meeting_rate}% de leads trabajados`} icon={Target} />
             <MetricCard active={selectedView === 'sales'} onClick={() => chooseMetric('sales')} label="Ventas" value={data.sales} note={money(data.revenue)} icon={Trophy} />
           </section>
 
+          <div className="performance-section-heading historical">
+            <div><p className="eyebrow">CONVERSIÓN HISTÓRICA VERIFICADA</p><h2>Qué pasó después del contacto</h2></div>
+            <small>No mezcla bots ni estados inferidos con la tasa principal</small>
+          </div>
+          <section className="metrics-grid performance-history-grid">
+            <MetricCard active={selectedView === 'responses' && !responseFilter} onClick={() => chooseMetric('responses')} label="Contactos verificables" value={data.verified_contacted ?? 0} note={`${data.legacy_contacts ?? 0} registros históricos por normalizar`} icon={UsersRound} />
+            <MetricCard active={selectedView === 'responses' && responseFilter === 'verified'} onClick={() => chooseResponseGroup('verified')} label="Tasa de respuesta verificada" value={`${data.verified_response_rate ?? 0}%`} note={`${data.verified_responded ?? 0} respuestas humanas registradas`} icon={PhoneCall} />
+            <MetricCard active={selectedView === 'responses' && responseFilter === 'over_24h'} onClick={() => chooseResponseGroup('over_24h')} label="Sin respuesta +24 h" value={data.no_response_24h ?? 0} note="Contactos que requieren seguimiento" icon={CalendarClock} />
+            <MetricCard active={selectedView === 'responses' && responseFilter === 'inferred'} onClick={() => chooseResponseGroup('inferred')} label="Respuestas inferidas" value={data.inferred_responses ?? 0} note="Clasificadas, pero sin interacción entrante" icon={Activity} />
+          </section>
+          <div className="performance-response-time">
+            <span>Tiempo promedio hasta la primera respuesta</span>
+            <strong>{formatResponseTime(data.average_response_minutes)}</strong>
+          </div>
+
           <section className="performance-overview-grid">
             <article className="panel performance-panel">
-              <div className="panel-heading"><div><p className="eyebrow">PIPELINE</p><h2>Estado actual de los leads</h2></div><small>{data.portfolio_total} en cartera</small></div>
+              <div className="panel-heading"><div><p className="eyebrow">RESPUESTA VERIFICADA</p><h2>Contactos y respuestas humanas</h2></div><small>Todo el historial</small></div>
               <div className="status-bars">
-                {Object.entries(data.status_counts || {}).filter(([, count]) => count > 0).map(([name, count]) => {
-                  const pct = data.portfolio_total ? Math.max(4, (count / data.portfolio_total) * 100) : 0;
-                  return (
-                    <button type="button" className="status-row performance-status-row" key={name} onClick={() => choosePipelineStatus(name)}>
-                      <div><span>{name}</span><strong>{count}</strong></div>
-                      <div className="bar"><i style={{ width: `${pct}%` }} /></div>
-                    </button>
-                  );
-                })}
-                {Object.values(data.status_counts || {}).every((count) => count === 0) && <EmptyState title="El pipeline está vacío" text="Genera o importa leads para comenzar." />}
+                <button type="button" className="status-row performance-status-row" onClick={() => chooseResponseGroup('verified')}>
+                  <div><span>Respuestas verificadas</span><strong>{data.response_breakdown?.verified ?? 0}</strong></div>
+                  <div className="bar"><i style={{ width: `${Math.max(4, data.verified_response_rate ?? 0)}%` }} /></div>
+                </button>
+                <button type="button" className="status-row performance-status-row" onClick={() => chooseResponseGroup('without_response')}>
+                  <div><span>Sin respuesta verificada</span><strong>{data.response_breakdown?.without_response ?? 0}</strong></div>
+                  <div className="bar"><i style={{ width: `${Math.max(4, 100 - (data.verified_response_rate ?? 0))}%` }} /></div>
+                </button>
+                <button type="button" className="status-row performance-status-row muted" onClick={() => chooseResponseGroup('inferred')}>
+                  <div><span>Inferidas por estado</span><strong>{data.response_breakdown?.inferred ?? 0}</strong></div>
+                  <small>No participan en la tasa hasta registrar la interacción entrante.</small>
+                </button>
               </div>
             </article>
 
@@ -315,13 +359,14 @@ export default function Dashboard() {
 
               <nav className="performance-detail-tabs" aria-label="Detalles del rendimiento">
                 {Object.entries(detailViews).map(([key, item]) => (
-                  <button key={key} type="button" className={selectedView === key ? 'active' : ''} onClick={() => { setSelectedView(key); setDetailStatus(''); }}>
+                  <button key={key} type="button" className={selectedView === key ? 'active' : ''} onClick={() => { setSelectedView(key); setDetailStatus(''); setResponseFilter(''); }}>
                     {item.label}<strong>{data.detail_totals?.[key] ?? 0}</strong>
                   </button>
                 ))}
               </nav>
 
               {detailStatus && <div className="performance-active-filter"><span>Estado: <strong>{detailStatus}</strong></span><button type="button" onClick={() => setDetailStatus('')}>Quitar</button></div>}
+              {selectedView === 'responses' && responseFilter && <div className="performance-active-filter"><span>Respuesta: <strong>{{ verified: 'Verificada', inferred: 'Inferida', without_response: 'Sin respuesta', over_24h: 'Sin respuesta +24 h' }[responseFilter]}</strong></span><button type="button" onClick={() => setResponseFilter('')}>Quitar</button></div>}
 
               <div className="performance-detail-list">
                 {detailItems.length === 0 ? <EmptyState title="Sin resultados" text={detailViews[selectedView].empty} /> : detailItems.map((row, index) => (

@@ -11,6 +11,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from .auditor import audit_website
+from .aura_backlog import (
+    admin_router as aura_backlog_admin_router,
+    mark_analysis_source_and_capture_result,
+    record_analysis,
+    usage_router as aura_backlog_usage_router,
+)
 from .auth import CurrentUser, get_current_user, require_admin, user_feature_enabled
 from .chat_analysis import analyze_chat
 from .config import get_settings
@@ -49,6 +55,8 @@ app.add_middleware(
 
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
+app.include_router(aura_backlog_admin_router)
+app.include_router(aura_backlog_usage_router)
 
 
 STATUSES = [
@@ -72,6 +80,18 @@ ACTIVE_CONVERSATION_STATUSES = {
 }
 FOCUS_CLOSED_STATUSES = ["Descartado", "No interesado", "No califica", "Implementación vendida"]
 PANAMA_TZ = ZoneInfo("America/Panama")
+
+PIPELINE_STAGES = [
+    {"key": "new", "label": "Nuevos", "description": "Sin primer contacto"},
+    {"key": "contacted", "label": "Contactados", "description": "Primer mensaje enviado"},
+    {"key": "responded", "label": "Respondieron", "description": "Conversación abierta"},
+    {"key": "interested", "label": "Interesados", "description": "Necesidad confirmada"},
+    {"key": "meeting_booked", "label": "Reunión agendada", "description": "Llamada de 15 minutos"},
+    {"key": "diagnosis_sold", "label": "Diagnóstico vendido", "description": "Diagnóstico Premium cerrado"},
+    {"key": "proposal_sent", "label": "Propuesta enviada", "description": "Implementación presentada"},
+    {"key": "implementation_sold", "label": "Implementación vendida", "description": "Cliente ganado"},
+    {"key": "closed", "label": "Cerrados", "description": "No interesado, no califica o descartado"},
+]
 
 
 def panama_today() -> date:
@@ -101,6 +121,35 @@ def _parse_date(value: Any) -> date | None:
         return date.fromisoformat(str(value)[:10])
     except (TypeError, ValueError):
         return None
+
+
+def _pipeline_stage(lead: dict[str, Any]) -> str:
+    """Map the operational fields to Growth by Laura's real commercial journey."""
+    status = str(lead.get("status") or "Nuevo")
+    conversation_status = str(lead.get("conversation_status") or "not_started")
+
+    # Won stages must be resolved before generic closed conversation states.
+    if status == "Implementación vendida":
+        return "implementation_sold"
+    if status == "Diagnóstico vendido":
+        return "diagnosis_sold"
+    if status == "Propuesta enviada":
+        return "proposal_sent"
+    if status == "Reunión agendada":
+        return "meeting_booked"
+    if status == "Interesado":
+        return "interested"
+    if status in {"No interesado", "No califica", "Descartado"}:
+        return "closed"
+    if status == "Respondió" or conversation_status in ACTIVE_CONVERSATION_STATUSES:
+        return "responded"
+    if (
+        status in {"Contactado", "Seguimiento 1", "Seguimiento 2"}
+        or int(lead.get("contact_attempts") or 0) > 0
+        or conversation_status in {"waiting_response", "followup_scheduled"}
+    ):
+        return "contacted"
+    return "new"
 
 
 def _response_due_state(value: Any, now_local: datetime) -> tuple[str, int]:
@@ -1560,6 +1609,55 @@ def aura_focus(
         "generated_at": datetime.now(PANAMA_TZ).isoformat(),
     }
 
+@app.get("/api/pipeline")
+def pipeline_overview(
+    user: Annotated[CurrentUser, Depends(require_admin)],
+) -> dict[str, Any]:
+    """Private admin-only pipeline aligned to the real commercial flow."""
+    profiles = _profile_map()
+    items: list[dict[str, Any]] = []
+    for lead in _fetch_all("leads"):
+        if lead.get("archived") or lead.get("excluded_reason"):
+            continue
+        owner_id = str(lead.get("owner_id") or "")
+        items.append({
+            "id": lead.get("id"),
+            "business_name": lead.get("business_name") or "Lead sin nombre",
+            "address": lead.get("address"),
+            "status": lead.get("status") or "Nuevo",
+            "conversation_status": lead.get("conversation_status") or "not_started",
+            "outcome": lead.get("outcome"),
+            "next_step": lead.get("next_step"),
+            "next_followup_date": lead.get("next_followup_date"),
+            "owner_id": owner_id or None,
+            "owner_name": profiles.get(owner_id, "Sin asignar") if owner_id else "Sin asignar",
+            "final_tier": lead.get("final_tier"),
+            "final_score": int(lead.get("final_score") or 0),
+            "contact_attempts": int(lead.get("contact_attempts") or 0),
+            "updated_at": lead.get("updated_at"),
+            "pipeline_stage": _pipeline_stage(lead),
+        })
+
+    stage_order = {stage["key"]: index for index, stage in enumerate(PIPELINE_STAGES)}
+    items.sort(key=lambda item: (
+        stage_order.get(str(item.get("pipeline_stage")), 999),
+        -int(item.get("final_score") or 0),
+        str(item.get("business_name") or "").lower(),
+    ))
+    stage_counts = {stage["key"]: 0 for stage in PIPELINE_STAGES}
+    for item in items:
+        key = str(item.get("pipeline_stage") or "new")
+        stage_counts[key] = stage_counts.get(key, 0) + 1
+
+    return {
+        "items": items,
+        "stages": PIPELINE_STAGES,
+        "stage_counts": stage_counts,
+        "total": len(items),
+        "generated_at": datetime.now(PANAMA_TZ).isoformat(),
+    }
+
+
 @app.get("/api/leads/view-counts")
 def lead_view_counts(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, int]:
     db = get_supabase()
@@ -1779,12 +1877,39 @@ def chat_analysis(
     payload: ChatAnalysisRequest,
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    return analyze_chat(
+    if payload.lead_id:
+        lead = _first(
+            get_supabase().table("leads")
+            .select("id,owner_id")
+            .eq("id", payload.lead_id)
+            .limit(1)
+            .execute()
+        )
+        if not lead:
+            raise HTTPException(status_code=404, detail="Lead no encontrado")
+        _assert_lead_work_access(lead, user)
+
+    result = analyze_chat(
         payload.transcript,
         channel=payload.channel,
         today=panama_today(),
         setter_name=user.full_name,
     )
+    backlog_case = record_analysis(
+        lead_id=payload.lead_id,
+        user=user,
+        analysis=result,
+    )
+    if backlog_case and backlog_case.get("id"):
+        result["backlog_id"] = backlog_case["id"]
+        result["backlog_saved"] = True
+    else:
+        result["backlog_saved"] = False
+        result["backlog_warning"] = (
+            "El análisis funciona, pero el Backlog todavía no pudo guardarlo. "
+            "La administradora debe instalar database/18_aura_learning_backlog.sql."
+        )
+    return result
 
 
 @app.post("/api/leads/{lead_id}/call-logs")
@@ -1963,6 +2088,24 @@ def create_call_log(
         }
     if lead_update_warning:
         call["save_warning"] = lead_update_warning
+
+    analysis_backlog_id = str((payload.analysis or {}).get("backlog_id") or "") or None
+    mark_analysis_source_and_capture_result(
+        lead_id=lead_id,
+        current_backlog_id=analysis_backlog_id,
+        call_log=call,
+        result_payload={
+            "activity_type": payload.activity_type,
+            "direction": payload.direction,
+            "channel": payload.channel,
+            "outcome": outcome_name,
+            "conversation_status": conversation_status,
+            "commercial_status": commercial_status or lead_update.get("status") or lead.get("status"),
+            "appointment_booked": payload.appointment_booked,
+            "sale_amount": payload.sale_amount,
+            "followup_date": row.get("followup_date"),
+        },
+    )
     return call
 
 
@@ -2036,16 +2179,17 @@ def dashboard(
     tier: str | None = None,
     outcome: str | None = None,
 ) -> dict[str, Any]:
-    """Panel de Rendimiento con métricas, filtros y detalle reutilizable.
+    """Rendimiento comercial con actividad del periodo y conversión histórica verificada.
 
-    No depende de tablas nuevas: consolida leads, call_logs y profiles para que
-    las tarjetas, el pipeline y el drill-down partan del mismo universo.
+    La tasa principal solo usa contactos salientes y respuestas humanas registradas en
+    ``call_logs``. Los estados históricos sin interacción entrante se muestran aparte
+    como datos inferidos pendientes de normalización.
     """
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la fecha final.")
 
-    db = get_supabase()
     today = panama_today()
+    now_local = datetime.now(PANAMA_TZ)
     profiles = _fetch_all("profiles", "id,full_name,role")
     profile_names = {str(item.get("id")): item.get("full_name") or "Usuario" for item in profiles}
 
@@ -2071,24 +2215,28 @@ def dashboard(
             return False
         return True
 
-    # Filtros de cartera. El periodo se aplica a la fecha de captura para
-    # "Leads guardados" y a occurred_at para las métricas de actividad.
-    portfolio_leads = active_leads
+    # Los filtros comerciales delimitan la cartera. El responsable actual se usa para
+    # métricas operativas del periodo; la conversión histórica se atribuye al setter
+    # que registró el primer contacto saliente.
+    analysis_leads = active_leads
+    if status:
+        analysis_leads = [item for item in analysis_leads if str(item.get("status") or "") == status]
+    if tier:
+        analysis_leads = [item for item in analysis_leads if str(item.get("final_tier") or "") == tier]
+    if outcome:
+        analysis_leads = [item for item in analysis_leads if str(item.get("outcome") or "") == outcome]
+
+    portfolio_leads = analysis_leads
     if agent_id:
         portfolio_leads = [item for item in portfolio_leads if str(item.get("owner_id") or "") == agent_id]
-    if status:
-        portfolio_leads = [item for item in portfolio_leads if str(item.get("status") or "") == status]
-    if tier:
-        portfolio_leads = [item for item in portfolio_leads if str(item.get("final_tier") or "") == tier]
-    if outcome:
-        portfolio_leads = [item for item in portfolio_leads if str(item.get("outcome") or "") == outcome]
 
     saved_leads = [item for item in portfolio_leads if within_period(item.get("capture_date") or item.get("created_at"))]
     portfolio_ids = {str(item.get("id")) for item in portfolio_leads if item.get("id")}
+    analysis_ids = {str(item.get("id")) for item in analysis_leads if item.get("id")}
     lead_map = {str(item.get("id")): item for item in active_leads if item.get("id")}
 
     raw_calls = _fetch_all("call_logs")
-    calls = []
+    calls: list[dict[str, Any]] = []
     for item in raw_calls:
         lead_id = str(item.get("lead_id") or "")
         if lead_id not in portfolio_ids:
@@ -2100,14 +2248,31 @@ def dashboard(
         calls.append(item)
     calls.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
 
-    non_contact = {"No respondió", "Buzón de voz", "Número incorrecto", "Pendiente"}
+    outgoing_activity_types = {"contact_attempt", "call_made", "message_sent", "email_sent"}
+    automated_outcomes = {
+        "respuesta automática fuera de horario",
+        "bot pidió nombre y motivo",
+        "whatsapp abrió flujo de paciente",
+    }
 
-    def is_connected(item: dict[str, Any]) -> bool:
-        return bool(
-            item.get("direction") == "Entrante"
-            or item.get("activity_type") == "response_received"
-            or str(item.get("outcome") or "") not in non_contact
+    def normalized_outcome(item: dict[str, Any]) -> str:
+        return str(item.get("outcome") or "").strip().lower()
+
+    def is_automated_response(item: dict[str, Any]) -> bool:
+        return normalized_outcome(item) in automated_outcomes
+
+    def is_response(item: dict[str, Any]) -> bool:
+        """Respuesta humana registrada; excluye bots y respuestas automáticas."""
+        incoming = (
+            str(item.get("direction") or "").strip().lower() == "entrante"
+            or str(item.get("activity_type") or "").strip().lower() == "response_received"
         )
+        return bool(incoming and not is_automated_response(item))
+
+    def is_outbound_contact(item: dict[str, Any]) -> bool:
+        direction = str(item.get("direction") or "").strip().lower()
+        activity_type = str(item.get("activity_type") or "").strip().lower()
+        return bool(direction == "saliente" or activity_type in outgoing_activity_types)
 
     def lead_summary(item: dict[str, Any]) -> dict[str, Any]:
         owner_id = str(item.get("owner_id") or "")
@@ -2133,14 +2298,16 @@ def dashboard(
         call_groups.setdefault(lead_id, []).append(item)
 
     worked_rows: list[dict[str, Any]] = []
-    contact_rows: list[dict[str, Any]] = []
+    period_contact_rows: list[dict[str, Any]] = []
+    period_contacted_ids: set[str] = set()
+    period_responded_ids: set[str] = set()
+
     for lead_id, items in call_groups.items():
         lead = lead_map.get(lead_id)
         if not lead:
             continue
         summary = lead_summary(lead)
         latest = items[0]
-        connected_for_lead = any(is_connected(item) for item in items)
         worked_rows.append({
             **summary,
             "activity_count": len(items),
@@ -2149,18 +2316,138 @@ def dashboard(
             "outcome": latest.get("outcome") or summary.get("outcome"),
             "agent_name": profile_names.get(str(latest.get("agent_id") or ""), "Usuario"),
         })
-        contact_rows.append({
-            **summary,
-            "activity_count": len(items),
-            "last_activity_at": latest.get("occurred_at"),
-            "channel": latest.get("channel"),
-            "outcome": latest.get("outcome") or summary.get("outcome"),
-            "agent_name": profile_names.get(str(latest.get("agent_id") or ""), "Usuario"),
-            "contacted": connected_for_lead,
-        })
+
+        outbound = sorted(
+            [item for item in items if is_outbound_contact(item) and not is_response(item)],
+            key=lambda item: str(item.get("occurred_at") or ""),
+        )
+        responses = sorted(
+            [item for item in items if is_response(item)],
+            key=lambda item: str(item.get("occurred_at") or ""),
+        )
+        if outbound:
+            period_contacted_ids.add(lead_id)
+            first_outbound = outbound[0]
+            period_contact_rows.append({
+                **summary,
+                "activity_count": len(items),
+                "occurred_at": first_outbound.get("occurred_at"),
+                "last_activity_at": latest.get("occurred_at"),
+                "channel": first_outbound.get("channel"),
+                "outcome": first_outbound.get("outcome") or summary.get("outcome"),
+                "agent_name": profile_names.get(str(first_outbound.get("agent_id") or ""), "Usuario"),
+            })
+        if responses:
+            period_responded_ids.add(lead_id)
 
     worked_rows.sort(key=lambda item: str(item.get("last_activity_at") or ""), reverse=True)
-    contact_rows.sort(key=lambda item: (bool(item.get("contacted")), str(item.get("last_activity_at") or "")), reverse=True)
+    period_contact_rows.sort(key=lambda item: str(item.get("occurred_at") or ""), reverse=True)
+
+    # Conversión histórica verificada y atribución por primer contacto.
+    all_time_call_groups: dict[str, list[dict[str, Any]]] = {}
+    for item in raw_calls:
+        lead_id = str(item.get("lead_id") or "")
+        if lead_id in analysis_ids:
+            all_time_call_groups.setdefault(lead_id, []).append(item)
+
+    legacy_response_statuses = {
+        "Respondió", "Interesado", "Reunión agendada", "Propuesta enviada",
+        "Diagnóstico vendido", "Implementación vendida", "No interesado",
+    }
+    response_rows: list[dict[str, Any]] = []
+
+    for lead in analysis_leads:
+        lead_id = str(lead.get("id") or "")
+        items = sorted(
+            all_time_call_groups.get(lead_id, []),
+            key=lambda item: str(item.get("occurred_at") or ""),
+        )
+        outbound_items = [item for item in items if is_outbound_contact(item) and not is_response(item)]
+        response_items = [item for item in items if is_response(item)]
+
+        first_outbound = outbound_items[0] if outbound_items else None
+        first_contact_dt = _parse_datetime((first_outbound or {}).get("occurred_at"))
+        response_after_contact = [
+            item for item in response_items
+            if not first_contact_dt
+            or ((_parse_datetime(item.get("occurred_at")) or first_contact_dt) >= first_contact_dt)
+        ]
+        first_response = response_after_contact[0] if response_after_contact else None
+
+        contact_verified = bool(first_outbound)
+        legacy_contacted = bool(
+            not contact_verified
+            and (
+                lead.get("first_contact_date")
+                or int(lead.get("contact_attempts") or 0) > 0
+                or str(lead.get("status") or "") in legacy_response_statuses
+            )
+        )
+        if not contact_verified and not legacy_contacted:
+            continue
+
+        first_contact_agent_id = str((first_outbound or {}).get("agent_id") or "")
+        attribution_verified = bool(first_outbound and first_contact_agent_id)
+        attributed_agent_id = first_contact_agent_id or str(lead.get("owner_id") or "")
+        if agent_id and attributed_agent_id != agent_id:
+            continue
+
+        verified_responded = bool(first_response and contact_verified)
+        inferred_responded = bool(
+            not verified_responded
+            and (
+                str(lead.get("status") or "") in legacy_response_statuses
+                or str(lead.get("conversation_status") or "") in ACTIVE_CONVERSATION_STATUSES
+            )
+        )
+
+        first_contact_at = (first_outbound or {}).get("occurred_at") or lead.get("first_contact_date")
+        first_response_at = (first_response or {}).get("occurred_at")
+        response_time_minutes = None
+        contact_dt = _parse_datetime(first_contact_at)
+        response_dt = _parse_datetime(first_response_at)
+        if contact_dt and response_dt and response_dt >= contact_dt:
+            response_time_minutes = int((response_dt - contact_dt).total_seconds() // 60)
+
+        over_24h = bool(
+            contact_verified
+            and not verified_responded
+            and contact_dt
+            and now_local - contact_dt.astimezone(PANAMA_TZ) >= timedelta(hours=24)
+        )
+        latest = items[-1] if items else None
+        summary = lead_summary(lead)
+        response_status = "Verificada" if verified_responded else "Inferida" if inferred_responded else "Sin respuesta"
+        response_rows.append({
+            **summary,
+            "responded": verified_responded,
+            "verified_response": verified_responded,
+            "inferred_response": inferred_responded,
+            "response_status": response_status,
+            "response_label": response_status,
+            "contact_verified": contact_verified,
+            "legacy_contact": legacy_contacted,
+            "first_contact_at": first_contact_at,
+            "first_response_at": first_response_at,
+            "response_time_minutes": response_time_minutes,
+            "over_24h": over_24h,
+            "activity_count": len(items),
+            "last_activity_at": (latest or {}).get("occurred_at") or summary.get("last_activity_at"),
+            "channel": (first_outbound or latest or {}).get("channel"),
+            "outcome": (latest or {}).get("outcome") or summary.get("outcome"),
+            "agent_id": attributed_agent_id or None,
+            "agent_name": profile_names.get(attributed_agent_id, "Sin atribuir"),
+            "attribution_verified": attribution_verified,
+        })
+
+    response_rows.sort(
+        key=lambda item: (
+            bool(item.get("verified_response")),
+            bool(item.get("inferred_response")),
+            str(item.get("first_response_at") or item.get("first_contact_at") or ""),
+        ),
+        reverse=True,
+    )
 
     overdue_leads = []
     for item in portfolio_leads:
@@ -2205,10 +2492,20 @@ def dashboard(
             "appointment_booked": bool(item.get("appointment_booked")),
             "sale_amount": float(item.get("sale_amount") or 0),
             "agent_name": profile_names.get(str(item.get("agent_id") or ""), "Usuario"),
-            "contacted": is_connected(item),
+            "contacted": is_response(item),
         }
 
-    connected = sum(1 for item in contact_rows if item.get("contacted"))
+    verified_contact_rows = [item for item in response_rows if item.get("contact_verified")]
+    verified_response_rows = [item for item in verified_contact_rows if item.get("verified_response")]
+    inferred_response_rows = [item for item in response_rows if item.get("inferred_response")]
+    legacy_contact_rows = [item for item in response_rows if item.get("legacy_contact")]
+    no_response_24h_rows = [item for item in verified_contact_rows if item.get("over_24h")]
+    verified_contacted = len(verified_contact_rows)
+    verified_responded = len(verified_response_rows)
+    verified_response_rate = round((verified_responded / verified_contacted * 100), 1) if verified_contacted else 0
+    response_times = [int(item["response_time_minutes"]) for item in verified_response_rows if item.get("response_time_minutes") is not None]
+    average_response_minutes = round(sum(response_times) / len(response_times)) if response_times else None
+
     meeting_leads = {str(item.get("lead_id") or "") for item in meeting_calls if item.get("lead_id")}
     revenue = sum(float(item.get("sale_amount") or 0) for item in sale_calls)
 
@@ -2251,11 +2548,24 @@ def dashboard(
         "followups_due": len(overdue_leads),
         "worked_leads": len(worked_rows),
         "contact_activities": len(calls),
-        "connected": connected,
+        "contacted_period": len(period_contacted_ids),
+        "responded_period": len(period_responded_ids),
+        "verified_contacted": verified_contacted,
+        "verified_responded": verified_responded,
+        "verified_response_rate": verified_response_rate,
+        "average_response_minutes": average_response_minutes,
+        "inferred_responses": len(inferred_response_rows),
+        "legacy_contacts": len(legacy_contact_rows),
+        "no_response_24h": len(no_response_24h_rows),
+        # Compatibilidad con el frontend anterior durante un despliegue parcial.
+        "connected": verified_responded,
+        "contacted_global": verified_contacted,
+        "responded_global": verified_responded,
+        "response_rate": verified_response_rate,
+        "contact_rate": verified_response_rate,
         "meetings": len(meeting_calls),
         "sales": len(sale_calls),
         "revenue": revenue,
-        "contact_rate": round((connected / len(contact_rows) * 100), 1) if contact_rows else 0,
         "meeting_rate": round((len(meeting_leads) / len(worked_rows) * 100), 1) if worked_rows else 0,
         "status_counts": status_counts,
         "activity_by_day": activity_by_day,
@@ -2264,7 +2574,9 @@ def dashboard(
             "saved": saved_rows[:detail_limit],
             "worked": worked_rows[:detail_limit],
             "overdue": overdue_leads[:detail_limit],
-            "contacts": contact_rows[:detail_limit],
+            "contacts_period": period_contact_rows[:detail_limit],
+            "responses": response_rows[:detail_limit],
+            "contacts": response_rows[:detail_limit],
             "meetings": [call_detail(item) for item in meeting_calls[:detail_limit]],
             "sales": [call_detail(item) for item in sale_calls[:detail_limit]],
         },
@@ -2272,9 +2584,20 @@ def dashboard(
             "saved": len(saved_rows),
             "worked": len(worked_rows),
             "overdue": len(overdue_leads),
-            "contacts": len(contact_rows),
+            "contacts_period": len(period_contact_rows),
+            "responses": len(response_rows),
+            "contacts": len(response_rows),
             "meetings": len(meeting_calls),
             "sales": len(sale_calls),
+        },
+        "response_breakdown": {
+            "contacted": verified_contacted,
+            "verified": verified_responded,
+            "responded": verified_responded,
+            "inferred": len(inferred_response_rows),
+            "without_response": max(0, verified_contacted - verified_responded),
+            "over_24h": len(no_response_24h_rows),
+            "legacy_contacts": len(legacy_contact_rows),
         },
         "filter_options": {
             "profiles": profiles,
@@ -2283,7 +2606,6 @@ def dashboard(
             "outcomes": distinct_outcomes,
         },
     }
-
 
 @app.get("/api/export/leads")
 def export_leads(

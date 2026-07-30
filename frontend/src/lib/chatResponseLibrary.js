@@ -1532,6 +1532,8 @@ export function analyzeChatLocally(transcript, channel = 'WhatsApp', options = {
   return {
     method: 'aura_setter_playbook_browser_v3',
     library_version: '2026.07.29.5',
+    playbook_version: '2026.07.29.5',
+    rule_key: detected.key,
     confidence,
     summary: matches.length
       ? `Aura detectó ${detected.label.toLowerCase()}${matches[1] ? ` y también ${matches[1].label.toLowerCase()}` : ''}.`
@@ -1555,6 +1557,8 @@ export function analyzeChatLocally(transcript, channel = 'WhatsApp', options = {
       evidence: evidenceLine(scope, item.patterns),
     })),
     analysis_scope: String(scope || '').slice(0, 500),
+    lead_message: String(scope || '').slice(0, 10000),
+    previous_context: String(context.previousAgentMessage || '').slice(0, 10000),
     classification: {
       commercial_status: detected.commercialStatus,
       conversation_status: detected.status,

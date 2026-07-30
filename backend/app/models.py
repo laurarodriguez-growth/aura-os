@@ -119,6 +119,7 @@ class CallLogCreate(BaseModel):
 class ChatAnalysisRequest(BaseModel):
     transcript: str = Field(min_length=1, max_length=50000)
     channel: Literal["Llamada", "WhatsApp", "Instagram", "Email", "Otro"] | None = None
+    lead_id: str | None = Field(default=None, max_length=80)
 
 
 UserRole = Literal["admin", "setter", "agent"]

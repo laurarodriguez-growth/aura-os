@@ -18,7 +18,7 @@ const rawOutcomes = [
   ['has_provider', 'Ya tiene proveedor', 'Objeción', '#94A3B8', 'followup_scheduled', 'Seguimiento 2', 60, 'Mantener en nurture y revisar en 60 días.', 4, false, false, true, true],
   ['interested', 'Interesado', 'Interés', '#B6FF2E', 'conversation_active', 'Interesado', 1, 'Acordar reunión o siguiente paso concreto.', 35, false, false, true, true],
   ['meeting_booked', 'Reunión agendada', 'Conversión', '#B6FF2E', 'closed', 'Reunión agendada', null, 'Preparar la reunión y confirmar asistencia.', 30, true, false, true, true],
-  ['not_interested', 'No interesado', 'Cierre', '#F87171', 'closed', 'No interesado', null, 'Cerrar la oportunidad y conservar el historial.', -100, true, false, true, true],
+  ['not_interested', 'No interesado', 'Cierre', '#F87171', 'closed', 'No interesado', null, 'Cerrar la oportunidad y conservar el historial.', -100, true, true, true, true],
   ['not_qualified', 'No califica', 'Cierre', '#F87171', 'closed', 'No califica', null, 'Cerrar la oportunidad con la razón documentada.', -100, true, false, true, true],
   ['invalid_number', 'Número incorrecto o inválido', 'Datos inválidos', '#EF4444', 'closed', 'No califica', null, 'Buscar otro canal; si no existe, descartar.', -100, true, true, true, true],
   ['do_not_contact', 'No contactar', 'Cierre', '#EF4444', 'closed', 'Descartado', null, 'No insistir. Conservar el historial.', -100, true, false, true, true],
