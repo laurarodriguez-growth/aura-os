@@ -39,7 +39,7 @@ function ProtectedApp() {
         <Route path="/focus" element={<Focus />} />
         <Route path="/finder" element={<LeadFinder />} />
         <Route path="/leads" element={<Leads />} />
-        <Route path="/pipeline" element={<Pipeline />} />
+        <Route path="/pipeline" element={isAdmin ? <Pipeline /> : <Navigate to="/focus" replace />} />
         <Route path="/followups" element={<Followups />} />
         <Route path="/call-log" element={<CallLog />} />
         <Route path="/performance" element={isAdmin ? <Dashboard /> : <Navigate to="/focus" replace />} />

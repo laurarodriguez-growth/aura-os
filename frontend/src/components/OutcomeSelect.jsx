@@ -2,6 +2,23 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../lib/api';
 import { defaultOutcomesFor } from '../lib/outcomeDefaults';
 
+function outcomeKey(item) {
+  const code = String(item?.code || '').trim().toLocaleLowerCase('es');
+  if (code) return `code:${code}`;
+  return `name:${String(item?.name || '').trim().toLocaleLowerCase('es')}`;
+}
+
+function mergeOperationalDefaults(rows, context) {
+  const remoteRows = Array.isArray(rows) ? rows : [];
+  const seen = new Set(remoteRows.map(outcomeKey));
+  const missingDefaults = defaultOutcomesFor(context).filter((item) => !seen.has(outcomeKey(item)));
+  return [...remoteRows, ...missingDefaults].sort((left, right) => {
+    const orderDifference = Number(left.sort_order || 9999) - Number(right.sort_order || 9999);
+    if (orderDifference !== 0) return orderDifference;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'es');
+  });
+}
+
 function groupByCategory(items) {
   return items.reduce((groups, item) => {
     const category = item.category || 'General';
@@ -28,7 +45,13 @@ export function useOutcomes(context = 'classification', includeInactive = false,
       if (!Array.isArray(rows) || rows.length === 0) {
         throw new Error('La biblioteca de outcomes todavía no tiene opciones disponibles.');
       }
-      setItems(rows);
+      if (allowLocalFallback) {
+        const mergedRows = mergeOperationalDefaults(rows, context);
+        setItems(mergedRows);
+        setUsingLocalFallback(mergedRows.some((item) => item.is_local_fallback));
+      } else {
+        setItems(rows);
+      }
     } catch (loadError) {
       if (allowLocalFallback) {
         setItems(defaultOutcomesFor(context));

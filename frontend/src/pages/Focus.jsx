@@ -63,8 +63,8 @@ function followupReason(lead) {
 
 const bucketOptions = [
   ['new', 'Nuevos'],
-  ['followups', 'Seguimientos'],
-  ['waiting', 'Esperando'],
+  ['followups', 'Seguimientos del día'],
+  ['waiting', 'Esperando primer contacto'],
   ['active', 'Conversaciones activas'],
 ];
 
@@ -98,6 +98,7 @@ export default function Focus() {
   const [selectedSetters, setSelectedSetters] = useState([]);
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
+  const firstName = String(profile?.full_name || '').trim().split(/\s+/)[0] || 'Usuario';
 
   const load = async (nextScope = scope, nextBucket = bucket, nextFollowupDate = followupDate) => {
     setLoading(true);
@@ -398,8 +399,8 @@ export default function Focus() {
   return (
     <>
       <PageHeader
-        title="Hoy"
-        description="Trabaja nuevos leads, seguimientos del día, primeros contactos en espera y conversaciones que ya recibieron respuesta."
+        title={`Hola, ${firstName}!`}
+        description="Esto es lo que tienes para hoy."
         actions={(
           <>
             {profile?.role === 'admin' && (
@@ -478,19 +479,19 @@ export default function Focus() {
         </div>
       )}
 
-      <nav className="focus-bucket-tabs" aria-label="Bandejas de Focus">
+      <section className="focus-summary-grid async-summary" aria-label="Bandejas de trabajo de Focus">
         {bucketOptions.map(([value, label]) => (
-          <button key={value} className={bucket === value ? 'active' : ''} onClick={() => changeBucket(value)}>
-            <span>{label}</span><strong>{bucketCount(value)}</strong>
+          <button
+            type="button"
+            key={value}
+            className={bucket === value ? 'active' : ''}
+            onClick={() => changeBucket(value)}
+            aria-pressed={bucket === value}
+          >
+            <span>{label}</span>
+            <strong>{bucketCount(value)}</strong>
           </button>
         ))}
-      </nav>
-
-      <section className="focus-summary-grid async-summary">
-        <div><span>Nuevos</span><strong>{summary.new_leads || 0}</strong></div>
-        <div><span>Seguimientos del día</span><strong>{summary.followups || 0}</strong></div>
-        <div><span>Esperando primer contacto</span><strong>{summary.waiting_responses || 0}</strong></div>
-        <div><span>Conversaciones activas</span><strong>{summary.active_conversations || 0}</strong></div>
       </section>
 
       {error && <div className="form-error page-error">{error}</div>}
