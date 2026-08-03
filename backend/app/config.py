@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     max_api_budget_per_job: int = 60
     default_city: str = "Ciudad de Panamá"
     log_level: str = "INFO"
+    gemini_api_key: str = ""
+    gemini_vision_model: str = "gemini-3-flash-preview"
 
     model_config = SettingsConfigDict(
         env_file=".env",

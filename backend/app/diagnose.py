@@ -117,6 +117,13 @@ class DiagnosisUpdate(BaseModel):
     executive_summary: str | None = Field(default=None, max_length=10000)
     assigned_to: str | None = None
     status: Literal["draft", "in_progress", "completed", "archived"] | None = None
+    implementation_recommended: bool | None = None
+    implementation_scope: str | None = Field(default=None, max_length=6000)
+    implementation_exclusions: str | None = Field(default=None, max_length=6000)
+    implementation_timeline: str | None = Field(default=None, max_length=1000)
+    implementation_deliverables: str | None = Field(default=None, max_length=6000)
+    client_responsibilities: str | None = Field(default=None, max_length=6000)
+    implementation_metric: str | None = Field(default=None, max_length=2000)
 
 
 class AssessmentAnswer(BaseModel):
@@ -141,6 +148,11 @@ class FindingCreate(BaseModel):
     recommendation: str | None = Field(default=None, max_length=5000)
     priority: int = Field(default=50, ge=0, le=100)
     status: Literal["open", "sent_to_focus", "resolved", "dismissed"] = "open"
+    confidence: Literal["low", "medium", "high"] = "medium"
+    risk: str | None = Field(default=None, max_length=5000)
+    commercial_impact: str | None = Field(default=None, max_length=5000)
+    requires_validation: bool = False
+    visual_status: Literal["green", "yellow", "red", "gray"] = "yellow"
 
 
 class FindingUpdate(BaseModel):
@@ -152,6 +164,11 @@ class FindingUpdate(BaseModel):
     recommendation: str | None = Field(default=None, max_length=5000)
     priority: int | None = Field(default=None, ge=0, le=100)
     status: Literal["open", "sent_to_focus", "resolved", "dismissed"] | None = None
+    confidence: Literal["low", "medium", "high"] | None = None
+    risk: str | None = Field(default=None, max_length=5000)
+    commercial_impact: str | None = Field(default=None, max_length=5000)
+    requires_validation: bool | None = None
+    visual_status: Literal["green", "yellow", "red", "gray"] | None = None
 
 
 class RoadmapCreate(BaseModel):
@@ -163,6 +180,11 @@ class RoadmapCreate(BaseModel):
     owner_id: str | None = None
     due_date: date | None = None
     order_index: int = 0
+    metric: str | None = Field(default=None, max_length=2000)
+    tool: str | None = Field(default=None, max_length=2000)
+    compliance_evidence: str | None = Field(default=None, max_length=3000)
+    dependency: str | None = Field(default=None, max_length=3000)
+    recommendation_group: Literal["immediate", "30_days", "later", "do_not_touch"] = "30_days"
 
 
 class RoadmapUpdate(BaseModel):
@@ -174,6 +196,11 @@ class RoadmapUpdate(BaseModel):
     due_date: date | None = None
     status: Literal["planned", "sent_to_focus", "in_progress", "completed", "cancelled"] | None = None
     order_index: int | None = None
+    metric: str | None = Field(default=None, max_length=2000)
+    tool: str | None = Field(default=None, max_length=2000)
+    compliance_evidence: str | None = Field(default=None, max_length=3000)
+    dependency: str | None = Field(default=None, max_length=3000)
+    recommendation_group: Literal["immediate", "30_days", "later", "do_not_touch"] | None = None
 
 
 class SendToFocus(BaseModel):
@@ -190,6 +217,8 @@ class FocusTaskUpdate(BaseModel):
 class InterviewQuestionUpdate(BaseModel):
     answer: str | None = Field(default=None, max_length=8000)
     status: Literal["pending", "answered", "not_applicable"] | None = None
+    evidence_status: Literal["pending", "answered", "answered_with_evidence", "requires_validation", "not_applicable"] | None = None
+    private_note: str | None = Field(default=None, max_length=5000)
 
 
 class InterviewQuestionCreate(BaseModel):
@@ -197,6 +226,8 @@ class InterviewQuestionCreate(BaseModel):
     rationale: str | None = Field(default=None, max_length=3000)
     section: Literal["general", "icp", "conversion", "process", "automation"] = "general"
     priority: Literal["low", "medium", "high", "critical"] = "medium"
+    block_key: str | None = Field(default=None, max_length=120)
+    question_type: Literal["core", "conditional", "generated"] = "generated"
 
 
 def _first(response: Any) -> dict[str, Any] | None:
@@ -222,6 +253,23 @@ def _score_level(score: int) -> str:
 def _impact_priority(impact: str, urgency: str) -> int:
     values = {"low": 20, "medium": 45, "high": 75, "critical": 95}
     return round((values.get(impact, 45) + values.get(urgency, 45)) / 2)
+
+
+def _analysis_block_key(question: dict[str, Any]) -> str:
+    key = str(question.get("question_key") or "")
+    explicit = {
+        "lead-volume": "measurement_conversion", "response-time": "first_response",
+        "conversion-funnel": "measurement_conversion", "followup-cadence": "followup",
+        "no-show": "appointments_recovery", "objections": "inquiry_journey",
+        "best-customer": "icp_service", "service-economics": "icp_service",
+        "decision-authority": "team_responsibilities", "lead-owner": "team_responsibilities",
+        "source-of-truth": "tools_records", "sops-handoffs": "team_responsibilities",
+        "current-tools": "tools_records", "manual-work": "automation_validation",
+        "reporting-rhythm": "measurement_conversion", "ninety-day-outcome": "objective_direction",
+    }
+    if key in explicit:
+        return explicit[key]
+    return {"icp": "icp_service", "conversion": "inquiry_journey", "process": "team_responsibilities", "automation": "automation_validation"}.get(str(question.get("section")), "objective_direction")
 
 
 def _require_diagnosis(diagnosis_id: str) -> dict[str, Any]:
@@ -309,6 +357,11 @@ def _delete_storage_object(path: str) -> None:
     )
 
 
+def _require_evidence_admin(user: CurrentUser) -> None:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Las evidencias de Diagnose están restringidas a administradores autorizados")
+
+
 @router.get("/diagnose/templates")
 def diagnosis_templates(user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
     return {"sections": ASSESSMENT_TEMPLATES, "score_options": SCORE_OPTIONS}
@@ -383,7 +436,11 @@ def list_diagnosis_reports(user: Annotated[CurrentUser, Depends(require_diagnose
 
 @router.get("/diagnose/{diagnosis_id}")
 def get_diagnosis(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    return _full_diagnosis(diagnosis_id)
+    diagnosis = _full_diagnosis(diagnosis_id)
+    if user.role != "admin":
+        diagnosis["evidence"] = []
+        diagnosis["evidence_restricted"] = True
+    return diagnosis
 
 
 @router.patch("/diagnose/{diagnosis_id}")
@@ -455,9 +512,43 @@ def save_assessment(
 def generate_findings(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
     _require_diagnosis(diagnosis_id)
     db = get_supabase()
-    assessments = db.table("diagnosis_assessments").select("section,answers").eq("diagnosis_id", diagnosis_id).execute().data or []
+    block_evaluations = db.table("diagnosis_block_evaluations").select("*").eq("diagnosis_id", diagnosis_id).execute().data or []
     created = 0
     updated = 0
+    for evaluation in block_evaluations:
+        visual_status = evaluation.get("visual_status") or "gray"
+        if visual_status == "green" or not evaluation.get("finding"):
+            continue
+        impact = "critical" if visual_status == "red" else "high" if visual_status == "yellow" else "medium"
+        priority_key = evaluation.get("priority") or "30_days"
+        urgency = "critical" if priority_key == "immediate" else "high" if priority_key == "30_days" else "medium"
+        source_key = f"block:{evaluation.get('block_key')}"
+        data = {
+            "diagnosis_id": diagnosis_id,
+            "source_section": evaluation.get("block_key"),
+            "source_key": source_key,
+            "title": evaluation.get("finding"),
+            "description": evaluation.get("risk"),
+            "evidence": evaluation.get("evidence_summary"),
+            "impact": impact,
+            "urgency": urgency,
+            "recommendation": evaluation.get("recommendation"),
+            "priority": _impact_priority(impact, urgency),
+            "confidence": evaluation.get("confidence") or "low",
+            "risk": evaluation.get("risk"),
+            "commercial_impact": evaluation.get("commercial_impact"),
+            "requires_validation": bool(evaluation.get("requires_validation")),
+            "visual_status": visual_status,
+            "created_by": user.id,
+        }
+        existing = _first(db.table("diagnosis_findings").select("id").eq("diagnosis_id", diagnosis_id).eq("source_key", source_key).limit(1).execute())
+        if existing:
+            db.table("diagnosis_findings").update(data).eq("id", existing["id"]).execute()
+            updated += 1
+        else:
+            db.table("diagnosis_findings").insert(data).execute()
+            created += 1
+    assessments = db.table("diagnosis_assessments").select("section,answers").eq("diagnosis_id", diagnosis_id).execute().data or []
     for assessment in assessments:
         section = assessment.get("section")
         template = ASSESSMENT_TEMPLATES.get(str(section), {})
@@ -539,6 +630,11 @@ def generate_roadmap(diagnosis_id: str, user: Annotated[CurrentUser, Depends(req
             "phase": phase,
             "title": finding.get("recommendation") or finding.get("title"),
             "description": finding.get("description"),
+            "metric": "Definir indicador y línea base",
+            "tool": "Herramienta operativa acordada",
+            "compliance_evidence": "Registro verificable de la acción completada",
+            "dependency": finding.get("risk"),
+            "recommendation_group": "immediate" if impact == "critical" else "30_days" if impact == "high" else "later",
             "priority": impact if impact in {"low", "medium", "high", "critical"} else "medium",
             "owner_id": user.id,
             "due_date": (date.today() + timedelta(days=due_days)).isoformat(),
@@ -617,8 +713,16 @@ def create_evidence(
     evidence_type: str = Form("note"),
     external_url: str | None = Form(None),
     notes: str | None = Form(None),
+    requirement_key: str | None = Form(None),
+    block_key: str | None = Form(None),
+    anonymized: bool = Form(False),
+    provided_by: str | None = Form(None),
+    received_at: str | None = Form(None),
+    analysis_purpose: str = Form("Diagnóstico del proceso comercial y de atención"),
+    validation_status: str = Form("pending_review"),
     file: UploadFile | None = File(None),
 ) -> dict[str, Any]:
+    _require_evidence_admin(user)
     _require_diagnosis(diagnosis_id)
     if evidence_type not in {"file", "link", "note"}:
         raise HTTPException(status_code=400, detail="Tipo de evidencia no válido")
@@ -630,6 +734,15 @@ def create_evidence(
         "evidence_type": evidence_type,
         "external_url": external_url,
         "notes": notes,
+        "requirement_key": requirement_key,
+        "block_key": block_key,
+        "anonymized": anonymized,
+        "provided_by": provided_by,
+        "received_at": received_at or _now_iso(),
+        "analysis_purpose": analysis_purpose,
+        "access_scope": "Laura y administradores autorizados",
+        "validation_status": validation_status,
+        "deletion_status": "retained",
     }
     if file:
         body = file.file.read()
@@ -658,6 +771,7 @@ def create_evidence(
 
 @router.get("/diagnose/evidence/{evidence_id}/open")
 def open_evidence(evidence_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, str]:
+    _require_evidence_admin(user)
     row = _first(get_supabase().table("diagnosis_evidence").select("*").eq("id", evidence_id).limit(1).execute())
     if not row:
         raise HTTPException(status_code=404, detail="Evidencia no encontrada")
@@ -684,6 +798,7 @@ def open_evidence(evidence_id: str, user: Annotated[CurrentUser, Depends(require
 
 @router.delete("/diagnose/{diagnosis_id}/evidence/{evidence_id}")
 def delete_evidence(diagnosis_id: str, evidence_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, bool]:
+    _require_evidence_admin(user)
     _require_diagnosis(diagnosis_id)
     db = get_supabase()
     row = _first(db.table("diagnosis_evidence").select("*").eq("id", evidence_id).eq("diagnosis_id", diagnosis_id).limit(1).execute())
@@ -691,7 +806,13 @@ def delete_evidence(diagnosis_id: str, evidence_id: str, user: Annotated[Current
         raise HTTPException(status_code=404, detail="Evidencia no encontrada")
     if row.get("storage_path"):
         _delete_storage_object(row["storage_path"])
-    db.table("diagnosis_evidence").delete().eq("id", evidence_id).execute()
+    db.table("diagnosis_evidence").update({
+        "storage_path": None,
+        "external_url": None,
+        "notes": "Evidencia eliminada al concluir el servicio.",
+        "deletion_status": "deleted",
+        "deleted_at": _now_iso(),
+    }).eq("id", evidence_id).execute()
     return {"deleted": True}
 
 
@@ -700,12 +821,14 @@ def analyze_diagnosis_evidence(
     diagnosis_id: str,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
+    _require_evidence_admin(user)
     diagnosis = _require_diagnosis(diagnosis_id)
     db = get_supabase()
     evidence = (
         db.table("diagnosis_evidence")
         .select("*")
         .eq("diagnosis_id", diagnosis_id)
+        .neq("deletion_status", "deleted")
         .order("created_at")
         .execute()
         .data
@@ -744,6 +867,9 @@ def analyze_diagnosis_evidence(
             "question": question["question"],
             "rationale": question["rationale"],
             "priority": question["priority"],
+            "block_key": _analysis_block_key(question),
+            "question_type": "generated",
+            "evidence_status": "requires_validation",
         }
         existing = existing_by_key.get(question["question_key"])
         if existing:
@@ -811,6 +937,8 @@ def create_interview_question(
         "section": payload.section,
         "priority": payload.priority,
         "source": "manual",
+        "block_key": payload.block_key,
+        "question_type": payload.question_type,
     }).execute()) or {}
 
 

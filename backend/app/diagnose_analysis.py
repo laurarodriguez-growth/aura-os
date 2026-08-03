@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import csv
+import base64
 import io
+import ipaddress
 import re
+import socket
 import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urljoin, urlparse
 
 import requests
+from bs4 import BeautifulSoup
 
 from .config import get_settings
 
@@ -16,6 +21,7 @@ settings = get_settings()
 
 MAX_FILE_TEXT = 15000
 MAX_TOTAL_TEXT = 60000
+MAX_LINK_BYTES = 2_000_000
 
 
 def _plain(value: Any) -> str:
@@ -50,6 +56,96 @@ def _storage_bytes(storage_path: str) -> bytes:
     if response.status_code != 200:
         return b""
     return response.content
+
+
+def _safe_public_url(value: str) -> str:
+    parsed = urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("El enlace debe usar http o https.")
+    addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80))
+    for address in addresses:
+        ip = ipaddress.ip_address(address[4][0])
+        if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved or ip.is_multicast:
+            raise ValueError("El enlace apunta a una red privada o reservada.")
+    return value
+
+
+def _extract_link_text(value: str) -> tuple[str, str | None]:
+    if not value:
+        return "", None
+    try:
+        current = _safe_public_url(value)
+        response = None
+        for _ in range(4):
+            response = requests.get(
+                current,
+                timeout=15,
+                allow_redirects=False,
+                headers={"User-Agent": "AuraGrow-Diagnose/2.0"},
+                stream=True,
+            )
+            if response.status_code in {301, 302, 303, 307, 308}:
+                location = response.headers.get("location")
+                if not location:
+                    break
+                current = _safe_public_url(urljoin(current, location))
+                continue
+            break
+        if response is None or response.status_code != 200:
+            return "", "El enlace no es público o no respondió correctamente; requiere revisión manual."
+        content_type = response.headers.get("content-type", "").lower()
+        body = b""
+        for chunk in response.iter_content(65536):
+            body += chunk
+            if len(body) > MAX_LINK_BYTES:
+                break
+        if "text/html" in content_type:
+            soup = BeautifulSoup(body, "html.parser")
+            for element in soup(["script", "style", "noscript", "svg"]):
+                element.decompose()
+            title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            text = re.sub(r"\s+", " ", soup.get_text(" ", strip=True))
+            return f"Título: {title}\n{text}"[:MAX_FILE_TEXT], None
+        if content_type.startswith("text/") or "json" in content_type:
+            return body.decode("utf-8", errors="replace")[:MAX_FILE_TEXT], None
+        return "", "El enlace apunta a un formato que no puede convertirse a texto automáticamente."
+    except Exception:
+        return "", "No se pudo leer el enlace de forma segura; requiere revisión manual."
+
+
+def _vision_text(body: bytes, mime: str, evidence_name: str) -> tuple[str, str | None]:
+    if not settings.gemini_api_key:
+        return "", "La imagen requiere análisis visual. Configura GEMINI_API_KEY o valida la captura manualmente."
+    try:
+        encoded = base64.b64encode(body).decode("ascii")
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_vision_model}:generateContent",
+            headers={"x-goog-api-key": settings.gemini_api_key, "Content-Type": "application/json"},
+            json={
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        {"text": (
+                            "Analiza esta evidencia para un diagnóstico de proceso comercial y atención. "
+                            "Transcribe únicamente lo visible y separa hechos observables, tiempos, responsable, "
+                            "registro, próximo paso, resultado y limitaciones. No infieras nombres ni datos clínicos. "
+                            f"Nombre de la evidencia: {evidence_name}."
+                        )},
+                        {"inline_data": {"mime_type": mime or "image/png", "data": encoded}},
+                    ],
+                }],
+                "generationConfig": {"maxOutputTokens": 1200, "temperature": 0.1},
+            },
+            timeout=60,
+        )
+        if response.status_code != 200:
+            return "", "El análisis visual no estuvo disponible; la captura requiere revisión manual."
+        payload = response.json()
+        texts = [part.get("text", "") for candidate in payload.get("candidates", []) for part in candidate.get("content", {}).get("parts", [])]
+        text = "\n".join(filter(None, texts)).strip()
+        return text[:MAX_FILE_TEXT], None if text else "La imagen no produjo texto verificable; requiere revisión manual."
+    except Exception:
+        return "", "El análisis visual falló; la captura requiere revisión manual."
 
 
 def _extract_file_text(item: dict[str, Any]) -> tuple[str, str | None]:
@@ -96,7 +192,7 @@ def _extract_file_text(item: dict[str, Any]) -> tuple[str, str | None]:
             return "\n".join(lines)[:MAX_FILE_TEXT], None
 
         if mime.startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp"}:
-            return "", "Las capturas se analizan mediante el nombre y las notas. Describe el dato visible más importante."
+            return _vision_text(body, mime, _plain(item.get("name")))
     except Exception:
         return "", "El archivo no pudo convertirse a texto; agrega una nota con el hallazgo principal."
 
@@ -120,6 +216,10 @@ def build_evidence_corpus(
 
     for item in evidence:
         extracted, limitation = _extract_file_text(item) if item.get("storage_path") else ("", None)
+        link_text, link_limitation = _extract_link_text(_plain(item.get("external_url"))) if item.get("external_url") else ("", None)
+        if link_text:
+            extracted = "\n".join(filter(None, [extracted, f"Contenido del enlace: {link_text}"]))[:MAX_FILE_TEXT]
+        limitation = limitation or link_limitation
         block = "\n".join(filter(None, [
             f"Evidencia: {_plain(item.get('name'))}",
             f"Categoría: {_plain(item.get('category'))}",
@@ -305,9 +405,7 @@ def analyze_corpus(
 
     if not evidence:
         limitations.append("No hay evidencias guardadas; el análisis se basa únicamente en el contexto inicial del diagnóstico.")
-    if any(item.get("limitation") and "capturas" in item["limitation"].lower() for item in evidence_context):
-        limitations.append("Aura no interpreta píxeles en esta versión. Para capturas, utiliza las notas para describir horas, mensajes y hechos visibles.")
-    limitations.append("El análisis es un borrador asistido por reglas y debe ser validado por Laura antes de modificar evaluaciones o hallazgos.")
+    limitations.append("La extracción automática identifica hechos visibles, pero Laura debe validar el contexto antes de convertirlos en hallazgos finales.")
     limitations = list(dict.fromkeys(limitations))
 
     answered_keys = {str(q.get("question_key")) for q in interview_questions if q.get("status") == "answered" and _plain(q.get("answer"))}

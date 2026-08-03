@@ -16,6 +16,7 @@ from .chat_analysis import analyze_chat
 from .config import get_settings
 from .db import get_supabase
 from .diagnose import router as diagnose_router
+from .diagnose_definitive import router as diagnose_definitive_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
 from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
 from .outcomes import (
@@ -47,6 +48,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
+app.include_router(diagnose_definitive_router)
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
 
