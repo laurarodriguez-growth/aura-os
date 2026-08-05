@@ -118,6 +118,12 @@ class LeadUpdate(BaseModel):
     outcome_stage: OutcomeStage | None = None
     response_due_at: datetime | None = None
     do_not_contact: bool | None = None
+    whatsapp_phone: str | None = Field(default=None, max_length=40)
+    email: str | None = Field(default=None, max_length=255)
+
+
+class DuplicateLeadMergeRequest(BaseModel):
+    target_lead_id: str = Field(min_length=36, max_length=36)
 
 
 class FocusAssignmentRequest(BaseModel):

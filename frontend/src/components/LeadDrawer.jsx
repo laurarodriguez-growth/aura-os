@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ChevronDown, ExternalLink, Phone, Save, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ExternalLink, Mail, MessageCircle, Phone, Save, X } from 'lucide-react';
 import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 import ContactComposer, { conversationLabel } from './ContactComposer';
@@ -23,6 +23,8 @@ function formFromLead(data) {
     manual_decision_maker_score: Number(data.manual_decision_maker_score || 0),
     conversation_status: data.conversation_status || 'not_started',
     do_not_contact: Boolean(data.do_not_contact),
+    whatsapp_phone: data.whatsapp_phone || '',
+    email: data.email || '',
   };
 }
 
@@ -59,6 +61,11 @@ function formatFollowupDate(value) {
   if (String(value).slice(0, 10) === todayISO) return 'Hoy';
   if (String(value).slice(0, 10) === tomorrowISO) return 'Mañana';
   return date.toLocaleDateString('es-PA', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function whatsappHref(phone, fallbackUrl) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  return digits ? `https://wa.me/${digits}` : (fallbackUrl || '');
 }
 
 export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChanged }) {
@@ -133,6 +140,8 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
         manual_volume_score: Number(form.manual_volume_score || 0),
         manual_followup_score: Number(form.manual_followup_score || 0),
         manual_decision_maker_score: Number(form.manual_decision_maker_score || 0),
+        whatsapp_phone: form.whatsapp_phone.trim() || null,
+        email: form.email.trim() || null,
       };
       await api(`/api/leads/${leadId}`, { method: 'PATCH', body: JSON.stringify(payload) });
       await load({ markSaved: true });
@@ -178,8 +187,8 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
     ['Web', lead.website],
     ['Google Maps', lead.maps_url],
     ['Instagram', lead.instagram_url],
-    ['WhatsApp', lead.whatsapp_url],
   ].filter(([, url]) => url);
+  const whatsappUrl = whatsappHref(form.whatsapp_phone, lead.whatsapp_url);
 
   const saveLabel = saving ? 'Guardando…' : dirty ? 'Guardar cambios' : saved ? 'Cambios guardados' : 'Sin cambios';
 
@@ -212,8 +221,25 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
             <>
               <div className="quick-links">
                 {lead.phone && <a href={`tel:${lead.phone}`}><Phone size={16} />{lead.phone}</a>}
+                {whatsappUrl && <a href={whatsappUrl} target="_blank" rel="noreferrer"><MessageCircle size={16} />WhatsApp</a>}
+                {form.email && <a href={`mailto:${form.email}`}><Mail size={16} />{form.email}</a>}
                 {links.map(([label, url]) => <a key={label} href={url} target="_blank" rel="noreferrer">{label}<ExternalLink size={14} /></a>)}
               </div>
+
+              <section className="lead-contact-editor">
+                <header>
+                  <div><strong>Datos de contacto</strong><small>Corrige el WhatsApp o agrega el correo sin alterar el historial.</small></div>
+                </header>
+                <div className="form-grid two">
+                  <label>WhatsApp
+                    <span className="contact-input-with-icon"><MessageCircle size={16} /><input type="tel" value={form.whatsapp_phone} onChange={(event) => changeForm({ whatsapp_phone: event.target.value })} placeholder={lead.country_code === 'CL' ? '+56 9…' : '+507…'} /></span>
+                    <small className="field-help">Aura completa el código de Panamá o Chile si escribes un número local válido.</small>
+                  </label>
+                  <label>Correo electrónico
+                    <span className="contact-input-with-icon"><Mail size={16} /><input type="email" value={form.email} onChange={(event) => changeForm({ email: event.target.value })} placeholder="contacto@empresa.com" /></span>
+                  </label>
+                </div>
+              </section>
 
               <section className="classification-essential-fields">
                 <div className="automatic-classification-heading">

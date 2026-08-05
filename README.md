@@ -31,6 +31,9 @@ Para instalar el alcance definitivo de Diagnose, abre
 Para instalar el selector geográfico y la separación por país, abre
 [README_SELECTOR_GEOGRAFICO.md](README_SELECTOR_GEOGRAFICO.md).
 
+Para instalar la consolidación segura de duplicados y la edición de WhatsApp y correo, abre
+[README_DUPLICADOS_CONTACTOS.md](README_DUPLICADOS_CONTACTOS.md).
+
 ## Seguridad
 
 Nunca subas estas claves a GitHub:

@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   ExternalLink,
+  GitMerge,
   MessageCircle,
   Phone,
   RefreshCw,
@@ -23,6 +24,7 @@ import PageHeader from '../components/PageHeader';
 import EmptyState from '../components/EmptyState';
 import LeadDrawer from '../components/LeadDrawer';
 import ContactComposer, { conversationLabel } from '../components/ContactComposer';
+import DuplicateLeadDialog from '../components/DuplicateLeadDialog';
 import { useAuth } from '../context/AuthContext';
 import { api } from '../lib/api';
 
@@ -86,6 +88,7 @@ export default function Focus() {
   const [profiles, setProfiles] = useState([]);
   const [statuses, setStatuses] = useState([]);
   const [selected, setSelected] = useState(null);
+  const [duplicateLead, setDuplicateLead] = useState(null);
   const [showLog, setShowLog] = useState(false);
   const [logMode, setLogMode] = useState('action');
   const [showDetails, setShowDetails] = useState(false);
@@ -591,6 +594,9 @@ export default function Focus() {
 
             <div className="focus-secondary-actions">
               <button onClick={() => setSelected(current.id)}><ExternalLink size={15} />Ver ficha completa</button>
+              {(canWorkCurrent || profile?.role === 'admin') && (
+                <button onClick={() => setDuplicateLead(current)}><GitMerge size={15} />Duplicado</button>
+              )}
               <button onClick={rotate}><ArrowRight size={15} />Saltar por ahora</button>
             </div>
 
@@ -630,6 +636,17 @@ export default function Focus() {
           profiles={profiles}
           onClose={() => setSelected(null)}
           onChanged={() => load(scope, bucket, followupDate)}
+        />
+      )}
+
+      {duplicateLead && (
+        <DuplicateLeadDialog
+          lead={duplicateLead}
+          onClose={() => setDuplicateLead(null)}
+          onMerged={(_, target) => {
+            setDuplicateLead(null);
+            removeCurrent(`Duplicado consolidado en ${target.business_name}. Se conservó todo el historial.`);
+          }}
         />
       )}
     </>

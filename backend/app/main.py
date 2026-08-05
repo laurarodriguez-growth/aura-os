@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 import math
 import re
+import unicodedata
 from datetime import date, datetime, timedelta, timezone
+from difflib import SequenceMatcher
 from typing import Annotated, Any
 from zoneinfo import ZoneInfo
 
@@ -28,7 +30,7 @@ from .outcomes import (
 )
 from .models import (
     AdminUserCreate, AdminUserDelete, AdminUserUpdate, CallLogCreate, ChatAnalysisRequest,
-    FocusAssignmentRequest, LeadUpdate, ScoringTemplateCreate, SearchJobCreate,
+    DuplicateLeadMergeRequest, FocusAssignmentRequest, LeadUpdate, ScoringTemplateCreate, SearchJobCreate,
 )
 from .scoring import (
     SCORING_CATALOG,
@@ -80,6 +82,11 @@ PANAMA_TZ = ZoneInfo("America/Panama")
 COUNTRIES = {
     "PA": {"code": "PA", "name": "Panamá", "timezone": "America/Panama"},
     "CL": {"code": "CL", "name": "Chile", "timezone": "America/Santiago"},
+}
+COUNTRY_DIAL_CODES = {"PA": "507", "CL": "56"}
+GENERIC_BUSINESS_NAME_TOKENS = {
+    "clinica", "clinic", "centro", "dental", "odontologico", "odontologica", "medico", "medica",
+    "spa", "restaurant", "restaurante", "vina", "vinas", "eventos", "turismo", "the", "de", "del",
 }
 
 PIPELINE_STAGES = [
@@ -460,6 +467,45 @@ def _distance_km(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> floa
     delta_lambda = math.radians(lon_b - lon_a)
     haversine = math.sin(delta_phi / 2) ** 2 + math.cos(phi_a) * math.cos(phi_b) * math.sin(delta_lambda / 2) ** 2
     return 2 * radius * math.asin(math.sqrt(haversine))
+
+
+def _normalized_business_name(value: str | None) -> str:
+    decomposed = unicodedata.normalize("NFKD", str(value or "").lower())
+    ascii_name = "".join(char for char in decomposed if not unicodedata.combining(char))
+    tokens = re.findall(r"[a-z0-9]+", ascii_name)
+    meaningful = [token for token in tokens if token not in GENERIC_BUSINESS_NAME_TOKENS]
+    return " ".join(meaningful or tokens)
+
+
+def _business_name_similarity(first: str | None, second: str | None) -> float:
+    normalized_first = _normalized_business_name(first)
+    normalized_second = _normalized_business_name(second)
+    if not normalized_first or not normalized_second:
+        return 0.0
+    if normalized_first == normalized_second:
+        return 1.0
+    return SequenceMatcher(None, normalized_first, normalized_second).ratio()
+
+
+def _normalize_whatsapp_phone(value: str | None, country_code: str | None) -> tuple[str | None, str | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    digits = re.sub(r"\D", "", raw)
+    if digits.startswith("00"):
+        digits = digits[2:]
+    country = _normalized_country(country_code)
+    dial_code = COUNTRY_DIAL_CODES.get(country)
+    if dial_code and raw[0] != "+" and not digits.startswith(dial_code):
+        expected_local_lengths = {"PA": {7, 8}, "CL": {9}}
+        if len(digits) in expected_local_lengths.get(country, set()):
+            digits = f"{dial_code}{digits}"
+    if len(digits) < 8 or len(digits) > 15:
+        raise HTTPException(
+            status_code=422,
+            detail="Ingresa un WhatsApp válido con código de país, por ejemplo +507 o +56.",
+        )
+    return f"+{digits}", f"https://wa.me/{digits}"
 
 
 def _assert_country_access(user: CurrentUser, country_code: str | None) -> None:
@@ -1952,6 +1998,149 @@ def list_leads(
     }
 
 
+@app.get("/api/leads/{lead_id}/duplicate-candidates")
+def duplicate_lead_candidates(
+    lead_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> dict[str, Any]:
+    db = get_supabase()
+    lead = _first(db.table("leads").select("*").eq("id", lead_id).limit(1).execute())
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead no encontrado")
+    _assert_country_access(user, lead.get("country_code"))
+    if user.role != "admin":
+        _assert_lead_work_access(lead, user)
+
+    normalized_name = _normalized_business_name(lead.get("business_name"))
+    significant_token = next((token for token in normalized_name.split() if len(token) >= 3), "")
+    query = (
+        db.table("leads")
+        .select(
+            "id,business_name,address,zone,city,region,country_code,latitude,longitude,phone,"
+            "whatsapp_phone,email,status,outcome,conversation_status,contact_attempts,"
+            "first_contact_date,last_contact_date,owner_id,created_at"
+        )
+        .neq("id", lead_id)
+        .eq("archived", False)
+        .is_("excluded_reason", "null")
+        .eq("country_code", _normalized_country(lead.get("country_code")))
+    )
+    if user.role != "admin":
+        query = query.eq("owner_id", user.id)
+    if significant_token:
+        query = query.ilike("business_name", f"*{_safe_search_term(significant_token)}*")
+    rows = query.order("created_at", desc=False).limit(120).execute().data or []
+
+    candidates: list[dict[str, Any]] = []
+    for candidate in rows:
+        similarity = _business_name_similarity(lead.get("business_name"), candidate.get("business_name"))
+        if similarity < 0.72:
+            continue
+        distance = None
+        try:
+            coordinates_present = all(
+                lead.get(key) is not None and candidate.get(key) is not None
+                for key in ("latitude", "longitude")
+            )
+            if coordinates_present:
+                distance = _distance_km(
+                    float(lead["latitude"]),
+                    float(lead["longitude"]),
+                    float(candidate["latitude"]),
+                    float(candidate["longitude"]),
+                )
+        except (TypeError, ValueError):
+            distance = None
+        candidates.append({
+            **candidate,
+            "name_similarity": round(similarity, 3),
+            "distance_km": round(distance, 2) if distance is not None else None,
+        })
+
+    candidate_ids = [item["id"] for item in candidates]
+    history_counts: dict[str, dict[str, int]] = {}
+    if candidate_ids:
+        logs = (
+            db.table("call_logs")
+            .select("lead_id,direction")
+            .in_("lead_id", candidate_ids)
+            .limit(2000)
+            .execute()
+            .data or []
+        )
+        for log in logs:
+            entry = history_counts.setdefault(str(log.get("lead_id")), {"activities": 0, "responses": 0})
+            entry["activities"] += 1
+            if log.get("direction") == "Entrante":
+                entry["responses"] += 1
+
+    for candidate in candidates:
+        counts = history_counts.get(str(candidate["id"]), {"activities": 0, "responses": 0})
+        candidate["history_count"] = counts["activities"]
+        candidate["response_count"] = counts["responses"]
+        distance = candidate.get("distance_km")
+        candidate["location_hint"] = (
+            "Muy cercano; revisa si es la misma sede"
+            if distance is not None and distance <= 0.5
+            else "Puede ser otra sucursal"
+            if distance is not None and distance > 2
+            else "Compara la dirección antes de consolidar"
+        )
+
+    candidates.sort(key=lambda item: (
+        0 if item["name_similarity"] == 1 else 1,
+        item["distance_km"] if item["distance_km"] is not None else 999999,
+        -item["name_similarity"],
+        -item["response_count"],
+    ))
+    return {
+        "source": {"id": lead["id"], "business_name": lead.get("business_name"), "address": lead.get("address")},
+        "items": candidates[:8],
+    }
+
+
+@app.post("/api/leads/{lead_id}/merge-duplicate")
+def merge_duplicate_lead(
+    lead_id: str,
+    payload: DuplicateLeadMergeRequest,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+) -> dict[str, Any]:
+    if payload.target_lead_id == lead_id:
+        raise HTTPException(status_code=422, detail="Selecciona otro lead para consolidar")
+    db = get_supabase()
+    source = _first(db.table("leads").select("*").eq("id", lead_id).limit(1).execute())
+    target = _first(db.table("leads").select("*").eq("id", payload.target_lead_id).limit(1).execute())
+    if not source or source.get("archived"):
+        raise HTTPException(status_code=404, detail="El lead que deseas descartar ya no está disponible")
+    if not target or target.get("archived") or target.get("excluded_reason"):
+        raise HTTPException(status_code=404, detail="El lead que deseas conservar ya no está disponible")
+    _assert_country_access(user, source.get("country_code"))
+    if user.role != "admin":
+        _assert_lead_work_access(source, user)
+        _assert_lead_work_access(target, user)
+    if _normalized_country(source.get("country_code")) != _normalized_country(target.get("country_code")):
+        raise HTTPException(status_code=422, detail="No se pueden consolidar leads de países diferentes")
+    if _business_name_similarity(source.get("business_name"), target.get("business_name")) < 0.72:
+        raise HTTPException(status_code=422, detail="Los nombres no son suficientemente similares para una consolidación segura")
+    try:
+        response = db.rpc(
+            "merge_duplicate_leads",
+            {"p_source_id": lead_id, "p_target_id": payload.target_lead_id, "p_actor_id": user.id},
+        ).execute()
+    except Exception as exc:
+        message = str(exc)
+        if "merge_duplicate_leads" in message and ("schema cache" in message.lower() or "function" in message.lower()):
+            raise HTTPException(
+                status_code=503,
+                detail="Falta instalar SQL_AURA_OS_DUPLICADOS_CONTACTOS.sql en Supabase antes de consolidar.",
+            ) from exc
+        logger.exception("No se pudo consolidar el lead duplicado")
+        raise HTTPException(status_code=500, detail="No se pudo consolidar el duplicado sin perder datos") from exc
+    rpc_data = response.data
+    result = rpc_data if isinstance(rpc_data, dict) else ((rpc_data or [{}])[0] if isinstance(rpc_data, list) else {})
+    return {"ok": True, "source_lead_id": lead_id, "target_lead_id": payload.target_lead_id, **result}
+
+
 @app.get("/api/leads/{lead_id}")
 def get_lead(lead_id: str, user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any]:
     db = get_supabase()
@@ -2006,6 +2195,17 @@ def update_lead(
             raise HTTPException(status_code=422, detail="El responsable seleccionado pertenece a otra operación")
     if "status" in changes and changes["status"] not in STATUSES:
         raise HTTPException(status_code=400, detail="Estado inválido")
+    if "email" in changes:
+        email = str(changes.get("email") or "").strip().lower()
+        if email and not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            raise HTTPException(status_code=422, detail="Ingresa un correo electrónico válido")
+        changes["email"] = email or None
+    if "whatsapp_phone" in changes:
+        normalized_phone, whatsapp_url = _normalize_whatsapp_phone(
+            changes.get("whatsapp_phone"), lead.get("country_code"),
+        )
+        changes["whatsapp_phone"] = normalized_phone
+        changes["whatsapp_url"] = whatsapp_url
     if not changes:
         return lead
 

@@ -21,8 +21,17 @@ function AutocompleteField({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const tokenRef = useRef(newSessionToken());
+  const fieldRef = useRef(null);
 
   useEffect(() => { setQuery(value?.name || ''); }, [value?.place_id, value?.name]);
+
+  useEffect(() => {
+    const closeSuggestions = (event) => {
+      if (!fieldRef.current?.contains(event.target)) setSuggestions([]);
+    };
+    document.addEventListener('pointerdown', closeSuggestions);
+    return () => document.removeEventListener('pointerdown', closeSuggestions);
+  }, []);
 
   useEffect(() => {
     if (disabled || query.trim().length < 2 || (value && query === value.name)) {
@@ -73,7 +82,7 @@ function AutocompleteField({
   };
 
   return (
-    <div className="places-field">
+    <div className="places-field" data-place-type={placeType} ref={fieldRef}>
       <label>{label}
         <span className="places-input-wrap">
           <MapPin size={17} />
@@ -83,6 +92,13 @@ function AutocompleteField({
             placeholder={placeholder}
             autoComplete="off"
             aria-expanded={suggestions.length > 0}
+            aria-haspopup="listbox"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                setSuggestions([]);
+                event.currentTarget.blur();
+              }
+            }}
             onChange={(event) => {
               setQuery(event.target.value);
               if (value) onSelect(null);
@@ -193,7 +209,6 @@ export default function GeographicSelector({
         </label>
       )}
 
-      <div className="google-attribution persistent"><img src="https://maps.gstatic.com/mapfiles/api-3/images/powered-by-google-on-white3.png" alt="Powered by Google" /></div>
     </section>
   );
 }

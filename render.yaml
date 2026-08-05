@@ -33,5 +33,9 @@ services:
         sync: false
       - key: GOOGLE_MAPS_API_KEY
         sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_VISION_MODEL
+        value: gemini-3-flash-preview
       - key: ALLOWED_ORIGINS
         sync: false
