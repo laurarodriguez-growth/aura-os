@@ -10,7 +10,8 @@ from fastapi.responses import StreamingResponse
 
 
 LEAD_EXPORT_FIELDS = [
-    "id", "place_id", "capture_date", "niche", "business_name", "address", "zone", "phone",
+    "id", "place_id", "capture_date", "country_code", "country_name", "region", "city",
+    "commercial_team", "niche", "business_name", "address", "zone", "phone",
     "website", "instagram_url", "whatsapp_url", "whatsapp_phone", "email", "maps_url", "rating",
     "review_count", "primary_type", "types", "business_status", "high_ticket_services",
     "doctor_names", "doctor_count_estimate", "doctor_count_confidence", "branch_addresses",

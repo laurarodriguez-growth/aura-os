@@ -237,7 +237,7 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                 <div className="advanced-options-body">
                   <div className="form-grid two classification-primary-grid">
                     <label>Estado comercial<select value={form.status} onChange={(e) => changeForm({ status: e.target.value })}>{statuses.map((status) => <option key={status}>{status}</option>)}</select></label>
-                    <label>Responsable<select value={form.owner_id} disabled={profile?.role !== 'admin'} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select>{profile?.role !== 'admin' && <small className="field-help">Solo un administrador puede reasignar leads.</small>}</label>
+                    <label>Responsable<select value={form.owner_id} disabled={profile?.role !== 'admin'} onChange={(e) => changeForm({ owner_id: e.target.value })}><option value="">Sin asignar</option>{profiles.filter((item) => ['ALL', lead.country_code || 'PA'].includes(item.operating_country || (item.role === 'admin' ? 'ALL' : 'PA'))).map((item) => <option key={item.id} value={item.id}>{item.full_name}</option>)}</select>{profile?.role !== 'admin' && <small className="field-help">Solo un administrador puede reasignar leads.</small>}</label>
                     <label>Estado de conversación
                       <select value={form.conversation_status} onChange={(e) => changeForm({ conversation_status: e.target.value })}>
                         <option value="not_started">No iniciada</option>

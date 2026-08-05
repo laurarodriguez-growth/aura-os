@@ -22,7 +22,8 @@ export default function Leads() {
   const [viewCounts, setViewCounts] = useState({});
   const [profiles, setProfiles] = useState([]);
   const [statuses, setStatuses] = useState([]);
-  const [filters, setFilters] = useState({ search: '', status: '', tier: '', view: 'all' });
+  const [countries, setCountries] = useState([]);
+  const [filters, setFilters] = useState({ search: '', status: '', tier: '', country_code: '', view: 'all' });
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -40,9 +41,10 @@ export default function Leads() {
       if (nextFilters.search.trim()) params.set('search', nextFilters.search.trim());
       if (nextFilters.status) params.set('status', nextFilters.status);
       if (nextFilters.tier) params.set('tier', nextFilters.tier);
+      if (nextFilters.country_code) params.set('country_code', nextFilters.country_code);
       const [leads, counts, profileRows, config] = await Promise.all([
         api(`/api/leads?${params}`),
-        api('/api/leads/view-counts'),
+        api(`/api/leads/view-counts${nextFilters.country_code ? `?country_code=${encodeURIComponent(nextFilters.country_code)}` : ''}`),
         api('/api/profiles'),
         api('/api/config'),
       ]);
@@ -50,6 +52,7 @@ export default function Leads() {
       setViewCounts(counts);
       setProfiles(profileRows);
       setStatuses(config.statuses || []);
+      setCountries(config.countries || []);
       setPage(nextPage);
     } catch (e) {
       setError(e.message);
@@ -116,6 +119,7 @@ export default function Leads() {
           </label>
           <label className="select-filter"><Filter size={16} /><select value={filters.tier} onChange={(e) => setFilters({ ...filters, tier: e.target.value })}><option value="">Todos los tiers</option><option>A</option><option>B</option><option>C</option><option>Descartar</option></select></label>
           <label className="select-filter"><select value={filters.status} onChange={(e) => setFilters({ ...filters, status: e.target.value })}><option value="">Todos los estados</option>{statuses.map((x) => <option key={x}>{x}</option>)}</select></label>
+          <label className="select-filter"><select value={filters.country_code} onChange={(e) => setFilters({ ...filters, country_code: e.target.value })}><option value="">Todos los países</option>{countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}</select></label>
           <button className="button primary" onClick={applyFilters}>Aplicar</button>
         </div>
 
@@ -130,11 +134,12 @@ export default function Leads() {
         ) : (
           <div className="table-scroll">
             <table>
-              <thead><tr><th>Score</th><th>Negocio</th><th>Nicho</th><th>Contacto</th><th>Estado</th><th>Seguimiento</th><th /></tr></thead>
+              <thead><tr><th>Score</th><th>Negocio</th><th>País</th><th>Nicho</th><th>Contacto</th><th>Estado</th><th>Seguimiento</th><th /></tr></thead>
               <tbody>{data.items.map((lead) => (
                 <tr key={lead.id} onClick={() => setSelected(lead.id)}>
                   <td><div className={`tier-badge tier-${String(lead.final_tier).toLowerCase()}`}><strong>{lead.final_score}</strong><span>{lead.final_tier}</span></div></td>
                   <td><strong>{lead.business_name}</strong><small>{lead.zone || lead.address || 'Sin ubicación'}</small></td>
+                  <td><strong>{lead.country_name || 'Panamá'}</strong><small>{lead.region || lead.city || lead.country_code || 'PA'}</small></td>
                   <td>{lead.niche}<small>{lead.review_count} reseñas · {lead.rating || '—'} ★</small></td>
                   <td>{lead.phone || 'Sin teléfono'}<small>{lead.website ? 'Web disponible' : 'Sin web detectada'}</small></td>
                   <td><span className="status-tag">{lead.status}</span><small>{lead.outcome || 'Sin resultado'}</small></td>

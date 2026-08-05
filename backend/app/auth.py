@@ -14,6 +14,7 @@ class CurrentUser:
     email: str
     full_name: str
     role: str
+    operating_country: str
 
 
 def _extract_token(authorization: str | None) -> str:
@@ -49,7 +50,7 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None) -> C
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Usuario inválido")
 
     db = get_supabase()
-    profile_response = db.table("profiles").select("id,full_name,role,is_active").eq("id", user_id).limit(1).execute()
+    profile_response = db.table("profiles").select("id,full_name,role,is_active,operating_country").eq("id", user_id).limit(1).execute()
     profile = (profile_response.data or [{}])[0]
     if profile.get("is_active") is False:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Tu acceso a Aura Grow está desactivado")
@@ -58,6 +59,7 @@ def get_current_user(authorization: Annotated[str | None, Header()] = None) -> C
         email=auth_user.get("email", ""),
         full_name=profile.get("full_name") or auth_user.get("user_metadata", {}).get("full_name") or auth_user.get("email", "Usuario"),
         role=profile.get("role") or "agent",
+        operating_country=(profile.get("operating_country") or ("ALL" if profile.get("role") == "admin" else "PA")).upper(),
     )
 
 

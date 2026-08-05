@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Annotated, Any
@@ -16,8 +17,11 @@ from .chat_analysis import analyze_chat
 from .config import get_settings
 from .db import get_supabase
 from .diagnose import router as diagnose_router
+from .diagnose_definitive import router as diagnose_definitive_router
 from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, csv_response
-from .google_places import build_queries, is_hard_excluded, place_to_lead, search_text
+from .google_places import (
+    autocomplete_places, build_queries, is_hard_excluded, place_details, place_to_lead, search_text,
+)
 from .outcomes import (
     derive_outcome_stage, get_outcome_definition, router as outcomes_router,
     suggested_followup_date,
@@ -47,6 +51,7 @@ app.add_middleware(
     expose_headers=["Content-Disposition"],
 )
 
+app.include_router(diagnose_definitive_router)
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
 
@@ -72,6 +77,10 @@ ACTIVE_CONVERSATION_STATUSES = {
 }
 FOCUS_CLOSED_STATUSES = ["Descartado", "No interesado", "No califica", "Implementación vendida"]
 PANAMA_TZ = ZoneInfo("America/Panama")
+COUNTRIES = {
+    "PA": {"code": "PA", "name": "Panamá", "timezone": "America/Panama"},
+    "CL": {"code": "CL", "name": "Chile", "timezone": "America/Santiago"},
+}
 
 PIPELINE_STAGES = [
     {"key": "new", "label": "Nuevos", "description": "Sin primer contacto"},
@@ -439,6 +448,30 @@ def _profile_map() -> dict[str, str]:
     return {str(item["id"]): item.get("full_name") or "Usuario" for item in profiles}
 
 
+def _normalized_country(value: str | None, fallback: str = "PA") -> str:
+    code = str(value or fallback).strip().upper()
+    return code if re.fullmatch(r"[A-Z]{2}|ALL", code) else fallback
+
+
+def _distance_km(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float:
+    radius = 6371.0088
+    phi_a, phi_b = math.radians(lat_a), math.radians(lat_b)
+    delta_phi = math.radians(lat_b - lat_a)
+    delta_lambda = math.radians(lon_b - lon_a)
+    haversine = math.sin(delta_phi / 2) ** 2 + math.cos(phi_a) * math.cos(phi_b) * math.sin(delta_lambda / 2) ** 2
+    return 2 * radius * math.asin(math.sqrt(haversine))
+
+
+def _assert_country_access(user: CurrentUser, country_code: str | None) -> None:
+    lead_country = _normalized_country(country_code)
+    allowed = _normalized_country(user.operating_country, "ALL" if user.role == "admin" else "PA")
+    if user.role != "admin" and allowed != "ALL" and lead_country != allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="Este lead pertenece a otra operación y no está disponible para tu equipo.",
+        )
+
+
 def _is_fresh_new_lead(lead: dict[str, Any]) -> bool:
     return (
         not lead.get("archived")
@@ -451,6 +484,7 @@ def _is_fresh_new_lead(lead: dict[str, Any]) -> bool:
 
 
 def _assert_lead_work_access(lead: dict[str, Any], user: CurrentUser) -> None:
+    _assert_country_access(user, lead.get("country_code"))
     owner_id = str(lead.get("owner_id") or "")
     if not owner_id:
         raise HTTPException(
@@ -465,25 +499,29 @@ def _assert_lead_work_access(lead: dict[str, Any], user: CurrentUser) -> None:
         )
 
 
-def _base_lead_count_query() -> Any:
-    return (
+def _base_lead_count_query(country_code: str | None = None) -> Any:
+    query = (
         get_supabase().table("leads")
         .select("id", count="exact")
         .eq("archived", False)
         .is_("excluded_reason", "null")
     )
+    if country_code:
+        query = query.eq("country_code", _normalized_country(country_code))
+    return query
 
 
-def _pending_lead_count() -> int:
+def _pending_lead_count(country_code: str | None = None) -> int:
     return _count(
-        _base_lead_count_query()
+        _base_lead_count_query(country_code)
         .in_("status", PENDING_STATUSES)
         .eq("do_not_contact", False)
     )
 
 
-def _lead_capacity_snapshot() -> dict[str, Any]:
-    pending = _pending_lead_count()
+def _lead_capacity_snapshot(country_code: str | None = None) -> dict[str, Any]:
+    country = _normalized_country(country_code) if country_code else None
+    pending = _pending_lead_count(country)
     available = max(0, LEAD_CAPACITY_MAX - pending)
     enabled = pending <= LEAD_GENERATION_UNLOCK_AT and available > 0
     return {
@@ -498,6 +536,7 @@ def _lead_capacity_snapshot() -> dict[str, Any]:
             if enabled
             else f"Tienes {pending} leads pendientes. Trabaja la base hasta dejarla en {LEAD_GENERATION_UNLOCK_AT} o menos."
         ),
+        "country_code": country,
     }
 
 
@@ -715,7 +754,7 @@ def _set_user_feature(user_id: str, feature_key: str, enabled: bool, granted_by:
 
 
 def _admin_user_rows() -> list[dict[str, Any]]:
-    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active,created_at,updated_at")
+    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active,operating_country,created_at,updated_at")
     profile_map = {str(row["id"]): row for row in profile_rows}
     diagnose_access = _feature_access_map("diagnose")
     items: list[dict[str, Any]] = []
@@ -732,6 +771,7 @@ def _admin_user_rows() -> list[dict[str, Any]]:
             "email": _model_value(auth_user, "email") or "",
             "full_name": profile.get("full_name") or _model_value(_model_value(auth_user, "user_metadata", {}), "full_name") or "Usuario",
             "role": profile.get("role") or "agent",
+            "operating_country": _normalized_country(profile.get("operating_country"), "ALL" if profile.get("role") == "admin" else "PA"),
             "is_active": active,
             "banned_until": _iso_value(_model_value(auth_user, "banned_until")),
             "last_sign_in_at": _iso_value(_model_value(auth_user, "last_sign_in_at")),
@@ -775,6 +815,7 @@ def me(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any
         "email": user.email,
         "full_name": user.full_name,
         "role": user.role,
+        "operating_country": user.operating_country,
         "features": {"diagnose": user_feature_enabled(user.id, "diagnose")},
     }
 
@@ -783,7 +824,7 @@ def me(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any
 def profiles(user: Annotated[CurrentUser, Depends(get_current_user)]) -> list[dict[str, Any]]:
     response = (
         get_supabase().table("profiles")
-        .select("id,full_name,role,is_active")
+        .select("id,full_name,role,is_active,operating_country")
         .eq("is_active", True)
         .order("full_name")
         .execute()
@@ -822,6 +863,7 @@ def admin_create_user(
             "id": created_id,
             "full_name": payload.full_name.strip(),
             "role": payload.role,
+            "operating_country": _normalized_country(payload.operating_country, "ALL" if payload.role == "admin" else "PA"),
             "is_active": True,
             "updated_at": utcnow_iso(),
         }).execute()
@@ -847,7 +889,7 @@ def admin_update_user(
     user: Annotated[CurrentUser, Depends(require_admin)],
 ) -> dict[str, Any]:
     db = get_supabase()
-    profile_response = db.table("profiles").select("id,role,is_active").eq("id", target_user_id).limit(1).execute()
+    profile_response = db.table("profiles").select("id,role,is_active,operating_country").eq("id", target_user_id).limit(1).execute()
     target = _first(profile_response)
     if not target:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
@@ -865,6 +907,8 @@ def admin_update_user(
         profile_update["full_name"] = values["full_name"].strip()
     if "role" in values:
         profile_update["role"] = values["role"]
+    if "operating_country" in values:
+        profile_update["operating_country"] = _normalized_country(values["operating_country"])
     if len(profile_update) > 1:
         db.table("profiles").update(profile_update).eq("id", target_user_id).execute()
 
@@ -966,12 +1010,59 @@ def public_config(user: Annotated[CurrentUser, Depends(get_current_user)]) -> di
         "call_log_page_sizes": CALL_LOG_PAGE_SIZES,
         "conversation_statuses": CONVERSATION_STATUSES,
         "outcome_stages": OUTCOME_STAGES,
+        "countries": list(COUNTRIES.values()),
     }
 
 
 @app.get("/api/lead-capacity")
-def lead_capacity(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, Any]:
-    return _lead_capacity_snapshot()
+def lead_capacity(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    country_code: str | None = Query(default=None, min_length=2, max_length=2),
+) -> dict[str, Any]:
+    selected = _normalized_country(country_code or (None if user.operating_country == "ALL" else user.operating_country)) if (country_code or user.operating_country != "ALL") else None
+    if selected:
+        _assert_country_access(user, selected)
+    return _lead_capacity_snapshot(selected)
+
+
+@app.get("/api/places/autocomplete")
+def places_autocomplete(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    input: str = Query(min_length=2, max_length=120),
+    country_code: str = Query(min_length=2, max_length=2),
+    place_type: str = Query(default="zone", pattern="^(city|zone)$"),
+    session_token: str = Query(min_length=8, max_length=120),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
+) -> dict[str, Any]:
+    code = _normalized_country(country_code)
+    _assert_country_access(user, code)
+    try:
+        suggestions = autocomplete_places(
+            input_text=input.strip(), country_code=code, session_token=session_token,
+            place_type=place_type, latitude=latitude, longitude=longitude,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"suggestions": suggestions, "attribution": "Google Maps"}
+
+
+@app.get("/api/places/details/{place_id}")
+def places_details(
+    place_id: str,
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    session_token: str = Query(min_length=8, max_length=120),
+    country_code: str = Query(min_length=2, max_length=2),
+) -> dict[str, Any]:
+    code = _normalized_country(country_code)
+    _assert_country_access(user, code)
+    try:
+        details = place_details(place_id=place_id, session_token=session_token)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if _normalized_country(details.get("country_code"), "") != code:
+        raise HTTPException(status_code=422, detail="La ubicación no pertenece al país seleccionado")
+    return details
 
 
 @app.get("/api/scoring/catalog")
@@ -1002,10 +1093,13 @@ def scoring_preset(
 def list_scoring_templates(
     user: Annotated[CurrentUser, Depends(get_current_user)],
     niche: str | None = None,
+    country: str | None = None,
 ) -> list[dict[str, Any]]:
     query = get_supabase().table("scoring_templates").select("*").order("is_default", desc=True).order("updated_at", desc=True)
     if niche:
         query = query.eq("niche", niche)
+    if country:
+        query = query.eq("country", country)
     return query.execute().data or []
 
 
@@ -1045,7 +1139,10 @@ def create_search_job(
     payload: SearchJobCreate,
     user: Annotated[CurrentUser, Depends(get_current_user)],
 ) -> dict[str, Any]:
-    capacity = _lead_capacity_snapshot()
+    country_code = _normalized_country(payload.country_code)
+    _assert_country_access(user, country_code)
+    country_name = payload.country_name.strip() or COUNTRIES.get(country_code, {}).get("name") or country_code
+    capacity = _lead_capacity_snapshot(country_code)
     if not capacity["generation_enabled"]:
         raise HTTPException(status_code=409, detail=capacity["message"])
 
@@ -1054,7 +1151,18 @@ def create_search_job(
         raise HTTPException(status_code=409, detail="La base ya alcanzó su capacidad operativa de leads pendientes.")
 
     budget = min(payload.api_request_budget, settings.max_api_budget_per_job)
-    queries = build_queries(payload.niche, payload.city, payload.zones, payload.services)
+    base_city = payload.base_city.model_dump(mode="json") if payload.base_city else None
+    target_locations = [item.model_dump(mode="json") for item in payload.target_locations]
+    city_name = (base_city or {}).get("name") or payload.city.strip()
+    zone_names = [item["formatted_address"] for item in target_locations] or payload.zones
+    queries = build_queries(
+        payload.niche,
+        city_name,
+        zone_names,
+        payload.services,
+        country_name=country_name,
+        search_mode=payload.search_mode,
+    )
     if not queries:
         raise HTTPException(status_code=400, detail="No se pudieron generar consultas")
 
@@ -1092,8 +1200,15 @@ def create_search_job(
     row = {
         "created_by": user.id,
         "niche": payload.niche,
-        "city": payload.city,
-        "zones": payload.zones,
+        "country_code": country_code,
+        "country_name": country_name,
+        "commercial_team": country_code,
+        "base_city": base_city,
+        "target_locations": target_locations,
+        "search_mode": payload.search_mode,
+        "radius_km": payload.radius_km,
+        "city": city_name,
+        "zones": [item["name"] for item in target_locations] or payload.zones,
         "services": payload.services,
         "max_results": effective_max_results,
         "pending_at_start": int(capacity["pending_leads"]),
@@ -1159,12 +1274,37 @@ def _upsert_discovered_place(
         return None, False
 
     existing = _first(db.table("leads").select("id").eq("place_id", place_id).limit(1).execute())
+    lead_data = place_to_lead(place, job["niche"], query_text)
+    expected_country = _normalized_country(job.get("country_code"))
+    actual_country = _normalized_country(lead_data.get("country_code"), "")
+    if actual_country != expected_country:
+        return None, False
+    if job.get("search_mode") == "radius" and job.get("radius_km"):
+        center = job.get("base_city") or {}
+        location = place.get("location") or {}
+        if None in {center.get("latitude"), center.get("longitude"), location.get("latitude"), location.get("longitude")}:
+            return None, False
+        if _distance_km(
+            float(center["latitude"]), float(center["longitude"]),
+            float(location["latitude"]), float(location["longitude"]),
+        ) > float(job["radius_km"]):
+            return None, False
     exclusion = is_hard_excluded(place, job["niche"])
     is_new_pending = existing is None and not exclusion
 
-    lead_data = place_to_lead(place, job["niche"], query_text)
     lead_data["excluded_reason"] = exclusion
-    lead_data["zone"] = None
+    lead_data["country_code"] = expected_country
+    lead_data["country_name"] = lead_data.pop("country", None) or job.get("country_name")
+    lead_data["commercial_team"] = job.get("commercial_team") or expected_country
+    matched_zone = next(
+        (
+            item for item in (job.get("target_locations") or [])
+            if str(item.get("name") or "").lower() in query_text.lower()
+            or str(item.get("formatted_address") or "").lower() in query_text.lower()
+        ),
+        None,
+    )
+    lead_data["zone"] = (matched_zone or {}).get("name")
     rules, thresholds = _job_scoring(job)
     lead_data.update(calculate_configured_score(lead_data, rules, thresholds))
     lead_data["scoring_mode"] = job.get("scoring_mode") or "automatic"
@@ -1225,7 +1365,7 @@ def step_search_job(
             new_leads_added = int(job.get("new_leads_added") or 0)
             budget_used = int(job.get("api_requests_used") or 0)
             budget = int(job.get("api_request_budget") or 0)
-            capacity_reached = _pending_lead_count() >= LEAD_CAPACITY_MAX
+            capacity_reached = _pending_lead_count(job.get("country_code")) >= LEAD_CAPACITY_MAX
 
             if capacity_reached or new_leads_added >= int(job.get("max_results") or 0) or query_index >= len(queries) or budget_used >= budget:
                 updated = {
@@ -1238,14 +1378,22 @@ def step_search_job(
                 return get_search_job(job_id, user)
 
             query_text = queries[query_index]
-            response, from_cache = search_text(query=query_text, page_token=job.get("current_page_token"))
+            base_city = job.get("base_city") or {}
+            response, from_cache = search_text(
+                query=query_text,
+                page_token=job.get("current_page_token"),
+                country_code=_normalized_country(job.get("country_code")),
+                latitude=base_city.get("latitude"),
+                longitude=base_city.get("longitude"),
+                radius_meters=(float(job.get("radius_km")) * 1000) if job.get("search_mode") == "radius" and job.get("radius_km") else None,
+            )
             if not from_cache:
                 budget_used += 1
             places = response.get("places") or []
             for place in places:
                 if new_leads_added >= int(job["max_results"]):
                     break
-                if _pending_lead_count() >= LEAD_CAPACITY_MAX:
+                if _pending_lead_count(job.get("country_code")) >= LEAD_CAPACITY_MAX:
                     capacity_reached = True
                     break
                 _, was_new_pending = _upsert_discovered_place(job, place, query_text, from_cache)
@@ -1369,7 +1517,7 @@ def focus_assignment_overview(
     user: Annotated[CurrentUser, Depends(require_admin)],
 ) -> dict[str, Any]:
     profiles = [
-        row for row in _fetch_all("profiles", "id,full_name,role,is_active")
+        row for row in _fetch_all("profiles", "id,full_name,role,is_active,operating_country")
         if row.get("is_active") is not False and str(row.get("role") or "agent") in {"admin", "setter", "agent"}
     ]
     leads = _fetch_all("leads")
@@ -1386,6 +1534,7 @@ def focus_assignment_overview(
         "id": str(profile.get("id") or ""),
         "full_name": profile.get("full_name") or "Usuario",
         "role": profile.get("role") or "agent",
+        "operating_country": _normalized_country(profile.get("operating_country"), "ALL" if profile.get("role") == "admin" else "PA"),
         "new_leads": assigned_counts.get(str(profile.get("id") or ""), 0),
     } for profile in profiles if profile.get("id")]
     setters.sort(key=lambda item: (item["new_leads"], item["full_name"].lower()))
@@ -1400,6 +1549,8 @@ def focus_assignment_overview(
         "final_tier": item.get("final_tier"),
         "final_score": item.get("final_score"),
         "address": item.get("address"),
+        "country_code": _normalized_country(item.get("country_code")),
+        "country_name": item.get("country_name") or "Panamá",
     } for item in unassigned[:100]]
 
     return {
@@ -1420,7 +1571,7 @@ def distribute_focus_leads(
     if not requested_setter_ids:
         raise HTTPException(status_code=422, detail="Selecciona al menos un setter para repartir los leads")
 
-    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active")
+    profile_rows = _fetch_all("profiles", "id,full_name,role,is_active,operating_country")
     profile_map = {
         str(row.get("id")): row for row in profile_rows
         if row.get("id") and row.get("is_active") is not False
@@ -1452,7 +1603,17 @@ def distribute_focus_leads(
     assigned = 0
     distribution = {setter_id: 0 for setter_id in requested_setter_ids}
     for lead in candidates:
-        setter_id = min(requested_setter_ids, key=lambda item: (current_load[item], order[item]))
+        lead_country = _normalized_country(lead.get("country_code"))
+        eligible_setters = [
+            setter_id for setter_id in requested_setter_ids
+            if _normalized_country(
+                profile_map[setter_id].get("operating_country"),
+                "ALL" if profile_map[setter_id].get("role") == "admin" else "PA",
+            ) in {"ALL", lead_country}
+        ]
+        if not eligible_setters:
+            continue
+        setter_id = min(eligible_setters, key=lambda item: (current_load[item], order[item]))
         response = (
             db.table("leads")
             .update({"owner_id": setter_id, "updated_at": utcnow_iso()})
@@ -1500,10 +1661,17 @@ def aura_focus(
     selected_date = work_date or today
     leads = _fetch_all("leads")
     profiles = _profile_map()
-    global_unassigned = sum(1 for lead in leads if _is_fresh_new_lead(lead) and not lead.get("owner_id"))
+    global_unassigned = sum(
+        1 for lead in leads
+        if _is_fresh_new_lead(lead)
+        and not lead.get("owner_id")
+        and (user.role == "admin" or user.operating_country == "ALL" or _normalized_country(lead.get("country_code")) == _normalized_country(user.operating_country))
+    )
     all_items: list[dict[str, Any]] = []
 
     for lead in leads:
+        if user.role != "admin" and user.operating_country != "ALL" and _normalized_country(lead.get("country_code")) != _normalized_country(user.operating_country):
+            continue
         owner_id = str(lead.get("owner_id") or "")
         if user.role != "admin" or scope == "mine":
             # Mi cola muestra únicamente leads preasignados al usuario actual.
@@ -1651,16 +1819,24 @@ def pipeline_overview(
 
 
 @app.get("/api/leads/view-counts")
-def lead_view_counts(user: Annotated[CurrentUser, Depends(get_current_user)]) -> dict[str, int]:
+def lead_view_counts(
+    user: Annotated[CurrentUser, Depends(get_current_user)],
+    country_code: str | None = Query(default=None, min_length=2, max_length=2),
+) -> dict[str, int]:
     db = get_supabase()
 
     def base() -> Any:
-        return (
+        query = (
             db.table("leads")
             .select("id", count="exact")
             .eq("archived", False)
             .is_("excluded_reason", "null")
         )
+        if user.role != "admin" and user.operating_country != "ALL":
+            query = query.eq("country_code", _normalized_country(user.operating_country))
+        elif country_code:
+            query = query.eq("country_code", _normalized_country(country_code))
+        return query
 
     all_count = _count(base())
     pending = _count(base().in_("status", PENDING_STATUSES).eq("do_not_contact", False))
@@ -1695,6 +1871,7 @@ def list_leads(
     status: str | None = None,
     tier: str | None = None,
     owner_id: str | None = None,
+    country_code: str | None = Query(default=None, min_length=2, max_length=2),
     followup_due: bool = False,
     include_excluded: bool = False,
     view: str = Query(default="all", pattern="^(all|pending|worked|contacted|followup|do_not_contact|discarded)$"),
@@ -1703,6 +1880,10 @@ def list_leads(
     db = get_supabase()
     start = (page - 1) * page_size
     query = db.table("leads").select("*", count="exact").eq("archived", False)
+    if user.role != "admin" and user.operating_country != "ALL":
+        query = query.eq("country_code", _normalized_country(user.operating_country))
+    elif country_code:
+        query = query.eq("country_code", _normalized_country(country_code))
     if not include_excluded:
         query = query.is_("excluded_reason", "null")
 
@@ -1777,6 +1958,7 @@ def get_lead(lead_id: str, user: Annotated[CurrentUser, Depends(get_current_user
     lead = _first(db.table("leads").select("*").eq("id", lead_id).limit(1).execute())
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
+    _assert_country_access(user, lead.get("country_code"))
     calls = db.table("call_logs").select("*").eq("lead_id", lead_id).order("occurred_at", desc=True).limit(100).execute().data or []
     activities = db.table("activities").select("*").eq("lead_id", lead_id).order("created_at", desc=True).limit(100).execute().data or []
     lead["call_logs"] = calls
@@ -1794,6 +1976,7 @@ def update_lead(
     lead = _first(db.table("leads").select("*").eq("id", lead_id).limit(1).execute())
     if not lead:
         raise HTTPException(status_code=404, detail="Lead no encontrado")
+    _assert_country_access(user, lead.get("country_code"))
 
     changes = payload.model_dump(exclude_unset=True, mode="json")
     owner_id = str(lead.get("owner_id") or "")
@@ -1805,6 +1988,22 @@ def update_lead(
             raise HTTPException(status_code=409, detail=f"Este lead está asignado a {owner_name}.")
         if "owner_id" in changes and str(changes.get("owner_id") or "") != owner_id:
             raise HTTPException(status_code=403, detail="Solo un administrador puede reasignar leads")
+    if user.role == "admin" and changes.get("owner_id"):
+        next_owner = _first(
+            db.table("profiles")
+            .select("id,role,is_active,operating_country")
+            .eq("id", changes["owner_id"])
+            .limit(1)
+            .execute()
+        )
+        if not next_owner or next_owner.get("is_active") is False:
+            raise HTTPException(status_code=422, detail="El responsable seleccionado no está activo")
+        owner_country = _normalized_country(
+            next_owner.get("operating_country"), "ALL" if next_owner.get("role") == "admin" else "PA",
+        )
+        lead_country = _normalized_country(lead.get("country_code"))
+        if owner_country not in {"ALL", lead_country}:
+            raise HTTPException(status_code=422, detail="El responsable seleccionado pertenece a otra operación")
     if "status" in changes and changes["status"] not in STATUSES:
         raise HTTPException(status_code=400, detail="Estado inválido")
     if not changes:
@@ -2073,6 +2272,7 @@ def list_call_logs(
     if page_size not in CALL_LOG_PAGE_SIZES:
         raise HTTPException(status_code=400, detail="El tamaño de página debe ser 25, 50 o 100.")
     start = (page - 1) * page_size
+    effective_agent_id = user.id if user.role != "admin" else agent_id
     response = (
         _call_log_query(
             search=search,
@@ -2082,7 +2282,7 @@ def list_call_logs(
             outcome=outcome,
             conversation_status=conversation_status,
             outcome_stage=outcome_stage,
-            agent_id=agent_id,
+            agent_id=effective_agent_id,
             count="exact",
         )
         .order("occurred_at", desc=True)
@@ -2104,15 +2304,18 @@ def followups(
     through: date | None = None,
 ) -> list[dict[str, Any]]:
     target = (through or date.today()).isoformat()
-    response = (
+    query = (
         get_supabase().table("leads").select("*")
         .lte("next_followup_date", target)
         .not_.in_("status", ["Descartado", "No interesado", "No califica", "Implementación vendida"])
         .eq("archived", False)
         .order("next_followup_date")
-        .limit(500)
-        .execute()
     )
+    if user.role != "admin":
+        query = query.eq("owner_id", user.id)
+        if user.operating_country != "ALL":
+            query = query.eq("country_code", _normalized_country(user.operating_country))
+    response = query.limit(500).execute()
     return response.data or []
 
 
@@ -2134,6 +2337,8 @@ def dashboard(
     """
     if date_from and date_to and date_from > date_to:
         raise HTTPException(status_code=400, detail="La fecha inicial no puede ser posterior a la fecha final.")
+    if user.role != "admin":
+        agent_id = user.id
 
     today = panama_today()
     now_local = datetime.now(PANAMA_TZ)
@@ -2144,6 +2349,7 @@ def dashboard(
     active_leads = [
         item for item in raw_leads
         if not item.get("archived") and not item.get("excluded_reason")
+        and (user.role == "admin" or user.operating_country == "ALL" or _normalized_country(item.get("country_code")) == _normalized_country(user.operating_country))
     ]
 
     def local_date(value: Any) -> date | None:
@@ -2560,6 +2766,12 @@ def export_leads(
     worked_only: bool = False,
 ) -> Any:
     leads = _fetch_all("leads")
+    if user.role != "admin":
+        leads = [
+            lead for lead in leads
+            if str(lead.get("owner_id") or "") == user.id
+            and (user.operating_country == "ALL" or _normalized_country(lead.get("country_code")) == _normalized_country(user.operating_country))
+        ]
     if worked_only:
         leads = [lead for lead in leads if int(lead.get("contact_attempts") or 0) > 0 or lead.get("status") not in {"Nuevo", "Investigando"}]
     filename = f"aura-grow_leads_{'trabajados' if worked_only else 'completos'}_{date.today().isoformat()}.csv"
@@ -2578,6 +2790,7 @@ def export_call_logs(
     outcome_stage: str | None = None,
     agent_id: str | None = None,
 ) -> Any:
+    effective_agent_id = user.id if user.role != "admin" else agent_id
     calls = _fetch_filtered_call_logs(
         search=search,
         date_from=date_from,
@@ -2586,7 +2799,7 @@ def export_call_logs(
         outcome=outcome,
         conversation_status=conversation_status,
         outcome_stage=outcome_stage,
-        agent_id=agent_id,
+        agent_id=effective_agent_id,
     )
     filtered = any([search, date_from, date_to, channel, outcome, conversation_status, outcome_stage, agent_id])
     suffix = "filtrado_" if filtered else ""
@@ -2601,6 +2814,14 @@ def export_call_logs(
 def export_consolidated(user: Annotated[CurrentUser, Depends(get_current_user)]) -> Any:
     leads = _fetch_all("leads")
     calls = _fetch_all("call_logs")
+    if user.role != "admin":
+        leads = [
+            lead for lead in leads
+            if str(lead.get("owner_id") or "") == user.id
+            and (user.operating_country == "ALL" or _normalized_country(lead.get("country_code")) == _normalized_country(user.operating_country))
+        ]
+        lead_ids = {str(lead.get("id")) for lead in leads}
+        calls = [call for call in calls if str(call.get("lead_id") or "") in lead_ids and str(call.get("agent_id") or "") == user.id]
     rows, fields = consolidated_rows(leads, calls)
     return csv_response(rows, fields, f"aura-grow_metricas_consolidadas_{date.today().isoformat()}.csv")
 

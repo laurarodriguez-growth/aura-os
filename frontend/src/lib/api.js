@@ -28,7 +28,8 @@ export async function api(path, options = {}) {
     : await response.text();
 
   if (!response.ok) {
-    const message = typeof payload === 'object' ? payload.detail : payload;
+    const detail = typeof payload === 'object' ? payload.detail : payload;
+    const message = typeof detail === 'object' ? detail.message || JSON.stringify(detail) : detail;
     throw new Error(message || `Error ${response.status}`);
   }
   return payload;

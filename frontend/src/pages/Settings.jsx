@@ -27,6 +27,7 @@ const emptyNewUser = {
   email: '',
   password: '',
   role: 'setter',
+  operating_country: 'PA',
   diagnose_enabled: false,
 };
 
@@ -70,6 +71,7 @@ export default function Settings() {
     setDrafts(Object.fromEntries(rows.map((item) => [item.id, {
       full_name: item.full_name || '',
       role: item.role || 'agent',
+      operating_country: item.operating_country || (item.role === 'admin' ? 'ALL' : 'PA'),
       password: '',
       diagnose_enabled: Boolean(item.diagnose_enabled),
     }])));
@@ -162,6 +164,7 @@ export default function Settings() {
       const payload = {
         full_name: draft.full_name,
         role: draft.role,
+        operating_country: draft.operating_country,
         diagnose_enabled: Boolean(draft.diagnose_enabled),
       };
       if (draft.password) payload.password = draft.password;
@@ -320,6 +323,13 @@ export default function Settings() {
                   <option value="admin">Administradora</option>
                 </select>
               </label>
+              <label>País operativo
+                <select value={newUser.operating_country} onChange={(event) => setNewUser({ ...newUser, operating_country: event.target.value })}>
+                  <option value="PA">Panamá</option>
+                  <option value="CL">Chile</option>
+                  <option value="ALL">Todos los países</option>
+                </select>
+              </label>
               <label className="feature-access-control create-feature-access">
                 <input
                   type="checkbox"
@@ -372,6 +382,13 @@ export default function Settings() {
                           <option value="setter">Setter Focus</option>
                           <option value="agent">Agente</option>
                           <option value="admin">Administradora</option>
+                        </select>
+                      </label>
+                      <label>País operativo
+                        <select value={draft.operating_country || 'PA'} onChange={(event) => updateDraft(item.id, 'operating_country', event.target.value)}>
+                          <option value="PA">Panamá</option>
+                          <option value="CL">Chile</option>
+                          <option value="ALL">Todos los países</option>
                         </select>
                       </label>
                       <label>Nueva contraseña temporal

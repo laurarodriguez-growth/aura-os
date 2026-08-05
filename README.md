@@ -25,11 +25,18 @@ Aura Grow integra:
 
 Abre [START_HERE.md](START_HERE.md) y sigue los pasos en orden.
 
+Para instalar el alcance definitivo de Diagnose, abre
+[README_INSTALACION_DIAGNOSE_2.md](README_INSTALACION_DIAGNOSE_2.md).
+
+Para instalar el selector geográfico y la separación por país, abre
+[README_SELECTOR_GEOGRAFICO.md](README_SELECTOR_GEOGRAFICO.md).
+
 ## Seguridad
 
 Nunca subas estas claves a GitHub:
 
 - `SUPABASE_SERVICE_ROLE_KEY` o `sb_secret_...`
 - `GOOGLE_MAPS_API_KEY`
+- `GEMINI_API_KEY`
 
 La publishable key de Supabase sí está diseñada para usarse en el navegador, siempre con RLS correctamente configurado.
