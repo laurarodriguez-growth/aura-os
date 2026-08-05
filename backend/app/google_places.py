@@ -11,6 +11,8 @@ from .config import get_settings
 from .db import get_supabase
 
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
+PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 FIELD_MASK = ",".join(
     [
         "places.id",
@@ -26,6 +28,7 @@ FIELD_MASK = ",".join(
         "places.types",
         "places.businessStatus",
         "places.location",
+        "places.addressComponents",
         "nextPageToken",
     ]
 )
@@ -59,30 +62,46 @@ def _cache_key(payload: dict[str, Any]) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def build_queries(niche: str, city: str, zones: list[str], services: list[str]) -> list[str]:
-    base_terms = (
-        ["clínica dental", "odontopediatría", "dentista", "odontología"]
-        if niche == "Dental"
-        else ["clínica de medicina estética", "centro de estética médica", "medicina estética"]
+def _niche_terms(niche: str) -> tuple[list[str], list[str]]:
+    if niche == "Gastronomía y turismo":
+        return (
+            ["restaurante", "viña", "centro de eventos", "turismo gastronómico"],
+            ["reservas de restaurante", "degustaciones en viña", "eventos corporativos", "experiencias gastronómicas"],
+        )
+    if niche == "Dental":
+        return (
+            ["clínica dental", "odontopediatría", "dentista", "odontología"],
+            ["implantes dentales", "ortodoncia", "odontopediatría", "diseño de sonrisa", "estética dental"],
+        )
+    return (
+        ["clínica de medicina estética", "centro de estética médica", "medicina estética"],
+        ["botox", "ácido hialurónico", "tratamientos láser", "rejuvenecimiento facial"],
     )
-    default_services = (
-        ["implantes dentales", "ortodoncia", "odontopediatría", "diseño de sonrisa", "estética dental"]
-        if niche == "Dental"
-        else ["botox", "ácido hialurónico", "tratamientos láser", "rejuvenecimiento facial"]
-    )
+
+
+def build_queries(
+    niche: str,
+    city: str,
+    zones: list[str],
+    services: list[str],
+    *,
+    country_name: str = "Panamá",
+    search_mode: str = "zones",
+) -> list[str]:
+    base_terms, default_services = _niche_terms(niche)
     chosen_services = services or default_services
     chosen_zones = zones or [""]
 
     queries: list[str] = []
     for term in base_terms:
-        queries.append(f"{term} {city}".strip())
+        queries.append(f"{term} {city} {country_name}".strip())
     for service in chosen_services:
-        queries.append(f"{service} {city}".strip())
-    for zone in chosen_zones:
+        queries.append(f"{service} {city} {country_name}".strip())
+    for zone in (chosen_zones if search_mode == "zones" else []):
         if not zone:
             continue
         for term in base_terms[:2]:
-            queries.append(f"{term} {zone} {city}".strip())
+            queries.append(f"{term} {zone} {country_name}".strip())
 
     # Stable dedupe while preserving priority order.
     seen: set[str] = set()
@@ -93,6 +112,102 @@ def build_queries(niche: str, city: str, zones: list[str], services: list[str]) 
             seen.add(normalized)
             unique.append(query)
     return unique
+
+
+def autocomplete_places(
+    *,
+    input_text: str,
+    country_code: str,
+    session_token: str,
+    place_type: str,
+    latitude: float | None = None,
+    longitude: float | None = None,
+) -> list[dict[str, Any]]:
+    settings = get_settings()
+    payload: dict[str, Any] = {
+        "input": input_text,
+        "languageCode": "es",
+        "includedRegionCodes": [country_code.upper()],
+        "sessionToken": session_token,
+    }
+    if place_type == "city":
+        payload["includedPrimaryTypes"] = ["(cities)"]
+    if latitude is not None and longitude is not None:
+        payload["locationBias"] = {
+            "circle": {
+                "center": {"latitude": latitude, "longitude": longitude},
+                "radius": 50000.0,
+            }
+        }
+    response = requests.post(
+        AUTOCOMPLETE_URL,
+        headers={"Content-Type": "application/json", "X-Goog-Api-Key": settings.google_maps_api_key},
+        json=payload,
+        timeout=12,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Google Places Autocomplete respondió {response.status_code}: {response.text[:500]}")
+    suggestions: list[dict[str, Any]] = []
+    for item in response.json().get("suggestions") or []:
+        prediction = item.get("placePrediction") or {}
+        place_id = prediction.get("placeId")
+        if not place_id:
+            continue
+        text = ((prediction.get("text") or {}).get("text") or "").strip()
+        structured = prediction.get("structuredFormat") or {}
+        main_text = ((structured.get("mainText") or {}).get("text") or text).strip()
+        secondary = ((structured.get("secondaryText") or {}).get("text") or "").strip()
+        suggestions.append({"place_id": place_id, "name": main_text, "description": text, "secondary_text": secondary})
+    return suggestions
+
+
+def place_details(*, place_id: str, session_token: str) -> dict[str, Any]:
+    settings = get_settings()
+    response = requests.get(
+        PLACE_DETAILS_URL.format(place_id=place_id),
+        params={"languageCode": "es", "sessionToken": session_token},
+        headers={
+            "X-Goog-Api-Key": settings.google_maps_api_key,
+            "X-Goog-FieldMask": "id,displayName,formattedAddress,location,addressComponents",
+        },
+        timeout=12,
+    )
+    if response.status_code >= 400:
+        raise RuntimeError(f"Google Place Details respondió {response.status_code}: {response.text[:500]}")
+    place = response.json()
+    geo = geographic_fields(place)
+    return {
+        "name": ((place.get("displayName") or {}).get("text") or place.get("formattedAddress") or "Ubicación"),
+        "formatted_address": place.get("formattedAddress") or "",
+        "place_id": place.get("id") or place_id,
+        "latitude": (place.get("location") or {}).get("latitude"),
+        "longitude": (place.get("location") or {}).get("longitude"),
+        **geo,
+    }
+
+
+def geographic_fields(place: dict[str, Any]) -> dict[str, Any]:
+    values: dict[str, tuple[str | None, str | None]] = {}
+    for component in place.get("addressComponents") or []:
+        long_text = component.get("longText")
+        short_text = component.get("shortText")
+        for component_type in component.get("types") or []:
+            values[component_type] = (long_text, short_text)
+
+    def long(*keys: str) -> str | None:
+        for key in keys:
+            if key in values and values[key][0]:
+                return values[key][0]
+        return None
+
+    country = long("country") or ""
+    country_code = ((values.get("country") or (None, None))[1] or "").upper()
+    return {
+        "country": country,
+        "country_code": country_code,
+        "region": long("administrative_area_level_1", "administrative_area_level_2"),
+        "city": long("locality", "postal_town", "administrative_area_level_3", "administrative_area_level_2"),
+    }
 
 
 def is_hard_excluded(place: dict[str, Any], niche: str) -> str | None:
@@ -129,6 +244,10 @@ def search_text(
     query: str,
     page_token: str | None,
     cache_days: int | None = None,
+    country_code: str = "PA",
+    latitude: float | None = None,
+    longitude: float | None = None,
+    radius_meters: float | None = None,
 ) -> tuple[dict[str, Any], bool]:
     settings = get_settings()
     db = get_supabase()
@@ -136,8 +255,15 @@ def search_text(
         "textQuery": query,
         "pageSize": 20,
         "languageCode": "es",
-        "regionCode": "PA",
+        "regionCode": country_code.upper(),
     }
+    if latitude is not None and longitude is not None:
+        payload["locationBias"] = {
+            "circle": {
+                "center": {"latitude": latitude, "longitude": longitude},
+                "radius": min(float(radius_meters or 50000), 50000.0),
+            }
+        }
     if page_token:
         payload["pageToken"] = page_token
 
@@ -206,6 +332,7 @@ def place_to_lead(place: dict[str, Any], niche: str, source: str) -> dict[str, A
         "business_status": place.get("businessStatus"),
         "latitude": location.get("latitude"),
         "longitude": location.get("longitude"),
+        **geographic_fields(place),
         "source": source,
         "last_google_fetch_at": utcnow().isoformat(),
     }

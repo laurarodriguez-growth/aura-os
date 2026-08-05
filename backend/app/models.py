@@ -6,7 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
-Niche = Literal["Dental", "Medicina estética"]
+Niche = Literal["Dental", "Medicina estética", "Gastronomía y turismo"]
 ScoringMode = Literal["automatic", "manual", "template"]
 ConversationStatus = Literal[
     "not_started", "waiting_response", "response_received", "conversation_active",
@@ -41,8 +41,27 @@ class TierThresholds(BaseModel):
         return self
 
 
+class GeographicPlace(BaseModel):
+    name: str = Field(min_length=1, max_length=180)
+    formatted_address: str = Field(min_length=1, max_length=500)
+    place_id: str = Field(min_length=3, max_length=255)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    country: str = Field(min_length=2, max_length=120)
+    country_code: str = Field(min_length=2, max_length=2)
+    region: str | None = Field(default=None, max_length=180)
+    city: str | None = Field(default=None, max_length=180)
+
+
 class SearchJobCreate(BaseModel):
     niche: Niche
+    country_code: str = Field(default="PA", min_length=2, max_length=2)
+    country_name: str = Field(default="Panamá", min_length=2, max_length=120)
+    base_city: GeographicPlace | None = None
+    target_locations: list[GeographicPlace] = Field(default_factory=list, max_length=12)
+    search_mode: Literal["zones", "radius"] = "zones"
+    radius_km: Literal[5, 10, 25, 50] | None = None
+    # Legacy fields remain accepted while older clients are upgraded.
     city: str = "Ciudad de Panamá"
     zones: list[str] = Field(default_factory=list, max_length=12)
     services: list[str] = Field(default_factory=list, max_length=12)
@@ -53,6 +72,23 @@ class SearchJobCreate(BaseModel):
     scoring_template_name: str | None = None
     scoring_rules: list[ScoringRule] = Field(default_factory=list, max_length=100)
     scoring_thresholds: TierThresholds = Field(default_factory=TierThresholds)
+
+    @model_validator(mode="after")
+    def validate_geography(self) -> "SearchJobCreate":
+        self.country_code = self.country_code.upper()
+        if self.search_mode == "radius" and not self.radius_km:
+            raise ValueError("Selecciona un radio de 5, 10, 25 o 50 km")
+        if self.base_city:
+            if self.base_city.country_code.upper() != self.country_code:
+                raise ValueError("La ciudad base no pertenece al país seleccionado")
+            for zone in self.target_locations:
+                if zone.country_code.upper() != self.country_code:
+                    raise ValueError("Todas las zonas deben pertenecer al país seleccionado")
+        elif not self.city.strip():
+            raise ValueError("Selecciona una ciudad base")
+        if self.search_mode == "zones" and self.base_city and not self.target_locations:
+            raise ValueError("Selecciona al menos una zona objetivo o usa búsqueda por radio")
+        return self
 
 
 class ScoringTemplateCreate(BaseModel):
@@ -129,12 +165,14 @@ class AdminUserCreate(BaseModel):
     email: str = Field(min_length=5, max_length=255)
     password: str = Field(min_length=8, max_length=128)
     role: UserRole = "setter"
+    operating_country: str = Field(default="PA", min_length=2, max_length=3)
     diagnose_enabled: bool = False
 
 
 class AdminUserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=120)
     role: UserRole | None = None
+    operating_country: str | None = Field(default=None, min_length=2, max_length=3)
     password: str | None = Field(default=None, min_length=8, max_length=128)
     diagnose_enabled: bool | None = None
 
