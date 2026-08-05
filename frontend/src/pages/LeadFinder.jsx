@@ -16,10 +16,15 @@ import {
   Trash2,
 } from 'lucide-react';
 import PageHeader from '../components/PageHeader';
+import GeographicSelector from '../components/GeographicSelector';
 import { api } from '../lib/api';
 import { useAuth } from '../context/AuthContext';
 
 const DEFAULT_THRESHOLDS = { A: 70, B: 50, C: 30 };
+const DEFAULT_COUNTRIES = [
+  { code: 'PA', name: 'Panamá', timezone: 'America/Panama' },
+  { code: 'CL', name: 'Chile', timezone: 'America/Santiago' },
+];
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -50,8 +55,11 @@ export default function LeadFinder() {
   const isAdmin = profile?.role === 'admin';
   const [form, setForm] = useState({
     niche: 'Dental',
-    city: 'Ciudad de Panamá',
-    zones: 'San Francisco, Obarrio',
+    country_code: profile?.operating_country && profile.operating_country !== 'ALL' ? profile.operating_country : 'PA',
+    base_city: null,
+    target_locations: [],
+    search_mode: 'zones',
+    radius_km: 10,
     services: 'Implantes dentales, Ortodoncia, Odontopediatría',
     max_results: 20,
     api_request_budget: 5,
@@ -71,6 +79,7 @@ export default function LeadFinder() {
     message: 'Calculando capacidad…',
   });
   const [capacityBusy, setCapacityBusy] = useState(true);
+  const [countries, setCountries] = useState(DEFAULT_COUNTRIES);
 
   const [scoringOpen, setScoringOpen] = useState(true);
   const [scoringMode, setScoringMode] = useState('automatic');
@@ -89,10 +98,10 @@ export default function LeadFinder() {
 
   useEffect(() => () => { stopRef.current = true; }, []);
 
-  const loadCapacity = async () => {
+  const loadCapacity = async (countryCode = form.country_code) => {
     setCapacityBusy(true);
     try {
-      const snapshot = await api('/api/lead-capacity');
+      const snapshot = await api(`/api/lead-capacity?country_code=${encodeURIComponent(countryCode)}`);
       setCapacity(snapshot);
       if (snapshot.generation_enabled) {
         setForm((current) => ({
@@ -109,8 +118,9 @@ export default function LeadFinder() {
     }
   };
 
-  const loadTemplates = async (niche = form.niche) => {
-    const rows = await api(`/api/scoring/templates?niche=${encodeURIComponent(niche)}`);
+  const loadTemplates = async (niche = form.niche, countryCode = form.country_code) => {
+    const countryName = countries.find((item) => item.code === countryCode)?.name || countryCode;
+    const rows = await api(`/api/scoring/templates?niche=${encodeURIComponent(niche)}&country=${encodeURIComponent(countryName)}`);
     setTemplates(rows);
     return rows;
   };
@@ -135,13 +145,15 @@ export default function LeadFinder() {
     const start = async () => {
       setScoringBusy(true);
       try {
-        const [catalogData, rows] = await Promise.all([
+        const [catalogData, configData, rows] = await Promise.all([
           api('/api/scoring/catalog'),
-          loadTemplates('Dental'),
-          loadCapacity(),
+          api('/api/config'),
+          loadTemplates('Dental', form.country_code),
+          loadCapacity(form.country_code),
         ]);
         setCatalog(catalogData.catalog || []);
         setOperatorLabels(catalogData.operators || {});
+        setCountries(configData.countries || DEFAULT_COUNTRIES);
         const defaultTemplate = rows.find((item) => item.is_default);
         if (defaultTemplate) {
           setScoringMode('template');
@@ -159,7 +171,15 @@ export default function LeadFinder() {
   }, []);
 
   const changeNiche = async (niche) => {
-    setForm((current) => ({ ...current, niche }));
+    setForm((current) => ({
+      ...current,
+      niche,
+      services: niche === 'Gastronomía y turismo'
+        ? 'Restaurantes, Viñas, Centros de eventos, Turismo gastronómico'
+        : niche === 'Dental'
+          ? 'Implantes dentales, Ortodoncia, Odontopediatría'
+          : 'Botox, Ácido hialurónico, Tratamientos láser',
+    }));
     setScoringMessage('');
     setScoringError('');
     try {
@@ -177,6 +197,18 @@ export default function LeadFinder() {
     } catch (e) {
       setScoringError(e.message);
     }
+  };
+
+  const changeCountry = async (countryCode) => {
+    setForm((current) => ({
+      ...current,
+      country_code: countryCode,
+      base_city: null,
+      target_locations: [],
+    }));
+    setJob(null);
+    setError('');
+    await Promise.all([loadCapacity(countryCode), loadTemplates(form.niche, countryCode)]);
   };
 
   const chooseMode = async (mode) => {
@@ -262,7 +294,7 @@ export default function LeadFinder() {
         body: JSON.stringify({
           name: templateName.trim(),
           niche: form.niche,
-          country: 'Panamá',
+          country: countries.find((item) => item.code === form.country_code)?.name || form.country_code,
           rules,
           thresholds,
           is_default: makeDefault,
@@ -309,7 +341,15 @@ export default function LeadFinder() {
   const tierWarning = maxPositive > 0 && Number(thresholds.A) > Math.min(100, maxPositive);
 
   const createJob = async () => {
-    const currentCapacity = await loadCapacity();
+    if (!form.base_city) {
+      setError('Selecciona una ciudad base desde las sugerencias de Google Maps.');
+      return;
+    }
+    if (form.search_mode === 'zones' && !form.target_locations.length) {
+      setError('Selecciona al menos una zona objetivo o cambia a búsqueda por radio.');
+      return;
+    }
+    const currentCapacity = await loadCapacity(form.country_code);
     if (!currentCapacity?.generation_enabled) {
       setError(currentCapacity?.message || 'El generador está bloqueado por capacidad operativa.');
       return;
@@ -330,10 +370,17 @@ export default function LeadFinder() {
     setJob(null);
     try {
       const selectedTemplate = templates.find((item) => item.id === selectedTemplateId);
+      const selectedCountry = countries.find((item) => item.code === form.country_code);
       const payload = {
         niche: form.niche,
-        city: form.city.trim(),
-        zones: form.zones.split(',').map((x) => x.trim()).filter(Boolean),
+        country_code: form.country_code,
+        country_name: selectedCountry?.name || form.base_city.country,
+        base_city: form.base_city,
+        target_locations: form.target_locations,
+        search_mode: form.search_mode,
+        radius_km: form.search_mode === 'radius' ? Number(form.radius_km) : null,
+        city: form.base_city.name,
+        zones: form.target_locations.map((item) => item.name),
         services: form.services.split(',').map((x) => x.trim()).filter(Boolean),
         max_results: Math.min(Number(form.max_results), Number(currentCapacity.max_new_leads)),
         api_request_budget: Number(form.api_request_budget),
@@ -383,6 +430,10 @@ export default function LeadFinder() {
   const progress = job?.phase === 'audit'
     ? (job.total_discovered ? Math.round((job.total_audited / job.total_discovered) * 100) : 0)
     : (job?.max_results ? Math.round(((job.new_leads_added ?? job.total_discovered) / job.max_results) * 100) : 0);
+  const availableCountries = profile?.operating_country && profile.operating_country !== 'ALL'
+    ? countries.filter((item) => item.code === profile.operating_country)
+    : countries;
+  const selectedCountryName = countries.find((item) => item.code === form.country_code)?.name || form.country_code;
 
   return (
     <>
@@ -411,16 +462,27 @@ export default function LeadFinder() {
             <p>Para abrir una nueva generación, la base debe tener <strong>{capacity.unlock_at} pendientes o menos</strong>.</p>
           </section>
 
-          <div className="form-grid two">
-            <label>Nicho
-              <select value={form.niche} onChange={(e) => changeNiche(e.target.value)}>
-                <option>Dental</option>
-                <option>Medicina estética</option>
-              </select>
-            </label>
-            <label>Ciudad<input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} /></label>
-          </div>
-          <label>Zonas, separadas por coma<input value={form.zones} onChange={(e) => setForm({ ...form, zones: e.target.value })} /></label>
+          <GeographicSelector
+            countries={availableCountries.length ? availableCountries : DEFAULT_COUNTRIES}
+            countryCode={form.country_code}
+            onCountryChange={changeCountry}
+            baseCity={form.base_city}
+            onBaseCityChange={(baseCity) => setForm((current) => ({ ...current, base_city: baseCity, target_locations: [] }))}
+            zones={form.target_locations}
+            onZonesChange={(targetLocations) => setForm((current) => ({ ...current, target_locations: targetLocations }))}
+            searchMode={form.search_mode}
+            onSearchModeChange={(searchMode) => setForm((current) => ({ ...current, search_mode: searchMode }))}
+            radiusKm={form.radius_km}
+            onRadiusChange={(radiusKm) => setForm((current) => ({ ...current, radius_km: radiusKm }))}
+            disabled={busy}
+          />
+          <label>Nicho
+            <select value={form.niche} onChange={(e) => changeNiche(e.target.value)}>
+              <option>Dental</option>
+              <option>Medicina estética</option>
+              <option>Gastronomía y turismo</option>
+            </select>
+          </label>
           <label>Servicios prioritarios, separados por coma<input value={form.services} onChange={(e) => setForm({ ...form, services: e.target.value })} /></label>
           <div className="form-grid two">
             <label>Máximo de leads<input type="number" min="1" max={Math.max(1, capacity.max_new_leads)} value={form.max_results} disabled={!capacity.generation_enabled} onChange={(e) => setForm({ ...form, max_results: Math.min(Number(e.target.value), Math.max(1, capacity.max_new_leads)) })} /><small>Puedes solicitar hasta {capacity.max_new_leads} en esta ronda.</small></label>
@@ -441,7 +503,7 @@ export default function LeadFinder() {
               <div className="scoring-editor">
                 <div className={`scoring-mode-grid ${isAdmin ? '' : 'setter-mode'}`}>
                   <button type="button" className={scoringMode === 'automatic' ? 'active' : ''} onClick={() => chooseMode('automatic')}>
-                    <Sparkles size={17} /><strong>Automático</strong><small>{isAdmin ? `Preestablecido para ${form.niche} en Panamá y editable.` : `Scoring aprobado para ${form.niche} en Panamá.`}</small>
+                    <Sparkles size={17} /><strong>Automático</strong><small>{isAdmin ? `Preestablecido para ${form.niche} en ${selectedCountryName} y editable.` : `Scoring aprobado para ${form.niche} en ${selectedCountryName}.`}</small>
                   </button>
                   {isAdmin && (
                     <button type="button" className={scoringMode === 'manual' ? 'active' : ''} onClick={() => chooseMode('manual')}>

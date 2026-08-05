@@ -28,6 +28,9 @@ Abre [START_HERE.md](START_HERE.md) y sigue los pasos en orden.
 Para instalar el alcance definitivo de Diagnose, abre
 [README_INSTALACION_DIAGNOSE_2.md](README_INSTALACION_DIAGNOSE_2.md).
 
+Para instalar el selector geográfico y la separación por país, abre
+[README_SELECTOR_GEOGRAFICO.md](README_SELECTOR_GEOGRAFICO.md).
+
 ## Seguridad
 
 Nunca subas estas claves a GitHub:
