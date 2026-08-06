@@ -149,7 +149,7 @@ export default function GeographicSelector({
         <div><strong>Mercado geográfico</strong><small>Ubicaciones reales de Google Maps, sin catálogos manuales.</small></div>
       </div>
 
-      <div className="form-grid two">
+      <div className="form-grid two geographic-primary-fields">
         <label>País
           <select value={countryCode} disabled={disabled} onChange={(event) => onCountryChange(event.target.value)}>
             {countries.map((country) => <option key={country.code} value={country.code}>{country.name}</option>)}

@@ -193,11 +193,14 @@ h2 { letter-spacing: -.03em; }
   border: 1px solid rgba(var(--accent-rgb), .2);
   border-radius: 18px;
   background: rgba(var(--accent-rgb), .035);
+  container-type: inline-size;
 }
 .geographic-heading { display: flex; align-items: center; gap: .7rem; }
 .geographic-heading > span { width: 36px; height: 36px; display: grid; place-items: center; color: var(--accent); background: rgba(var(--accent-rgb), .12); border-radius: 12px; }
 .geographic-heading div { display: grid; gap: .15rem; }
 .geographic-heading small { color: var(--muted); }
+.geographic-selector .geographic-primary-fields.form-grid.two,
+.geographic-selector .search-area-modes { grid-template-columns: 1fr; }
 .places-field { position: relative; min-width: 0; }
 .places-field:focus-within { z-index: 60; }
 .places-field > label { margin-bottom: 0; }
@@ -206,18 +209,19 @@ h2 { letter-spacing: -.03em; }
 .places-input-wrap input { width: 100%; padding-left: 2.35rem; padding-right: 2.4rem; }
 .places-spinner { position: absolute; right: .85rem; top: 50%; width: 15px; height: 15px; margin-top: -7px; border: 2px solid rgba(var(--accent-rgb), .18); border-top-color: var(--accent); border-radius: 50%; animation: places-spin .8s linear infinite; }
 @keyframes places-spin { to { transform: rotate(360deg); } }
-.places-suggestions { position: absolute; z-index: 60; left: 0; right: 0; top: calc(100% + .4rem); max-height: 310px; overflow-x: hidden; overflow-y: auto; border: 1px solid #323b34; border-radius: 12px; background: #111612; box-shadow: 0 22px 54px rgba(0,0,0,.62), 0 0 0 1px rgba(188,255,71,.04); isolation: isolate; }
-.places-field[data-place-type="city"] .places-suggestions { right: 0; left: auto; width: min(360px, calc(100vw - 2rem)); min-width: 100%; }
-.places-suggestions button { width: 100%; min-height: 58px; display: grid; grid-template-columns: 18px minmax(0,1fr); align-items: start; gap: .7rem; padding: .72rem .85rem; color: var(--text); text-align: left; border: 0; border-bottom: 1px solid var(--border); background: #111612; cursor: pointer; }
+.places-suggestions { position: relative; z-index: 2; left: 0; right: 0; top: auto; margin-top: .4rem; max-height: 300px; overflow-x: hidden; overflow-y: auto; border: 1px solid #323b34; border-radius: 12px; background: #111612; box-shadow: 0 16px 38px rgba(0,0,0,.48), 0 0 0 1px rgba(188,255,71,.04); isolation: isolate; }
+.places-field[data-place-type="city"] .places-suggestions { right: 0; left: 0; width: auto; min-width: 0; }
+.places-suggestions button { width: 100%; min-height: 64px; height: auto; display: grid; grid-template-columns: 18px minmax(0,1fr); align-items: start; gap: .7rem; padding: .72rem .85rem; color: var(--text); text-align: left; border: 0; border-bottom: 1px solid var(--border); background: #111612; cursor: pointer; }
 .places-suggestions button:hover,
 .places-suggestions button:focus-visible { background: #1a2419; outline: none; }
 .places-suggestions button > svg { flex: 0 0 auto; margin-top: .15rem; color: var(--accent); }
 .places-suggestions button span { display: block; min-width: 0; }
 .places-suggestions button strong { display: block; overflow: hidden; font-size: .82rem; line-height: 1.25; text-overflow: ellipsis; white-space: nowrap; }
-.places-suggestions button small { display: block; margin-top: .2rem; overflow: hidden; color: var(--muted); font-size: .7rem; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.places-suggestions button small { display: -webkit-box; margin-top: .2rem; overflow: hidden; color: var(--muted); font-size: .7rem; line-height: 1.35; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .places-error { display: block; margin-top: .3rem; color: var(--danger); }
 .google-attribution { position: sticky; bottom: 0; padding: .38rem .75rem; color: #5f6368; font: 600 .7rem/1.2 Arial, sans-serif; text-align: right; background: #fff; }
 .google-attribution img { display: inline-block; width: auto; height: 15px; vertical-align: middle; }
+
 .search-area-modes { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: .65rem; }
 .search-area-modes > button { display: flex; gap: .6rem; padding: .8rem; color: var(--text); text-align: left; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); cursor: pointer; }
 .search-area-modes > button.active { border-color: var(--accent); background: rgba(var(--accent-rgb), .09); }

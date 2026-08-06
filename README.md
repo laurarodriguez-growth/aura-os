@@ -34,6 +34,9 @@ Para instalar el selector geográfico y la separación por país, abre
 Para instalar la consolidación segura de duplicados y la edición de WhatsApp y correo, abre
 [README_DUPLICADOS_CONTACTOS.md](README_DUPLICADOS_CONTACTOS.md).
 
+Para publicar la versión consolidada sin reactivar una compilación anterior, abre
+[PUBLICAR_VERSION_V10.md](PUBLICAR_VERSION_V10.md).
+
 ## Seguridad
 
 Nunca subas estas claves a GitHub:
