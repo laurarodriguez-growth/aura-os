@@ -97,7 +97,11 @@ export default function Focus() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [showAssignment, setShowAssignment] = useState(false);
-  const [assignment, setAssignment] = useState({ unassigned_count: 0, unassigned: [], setters: [] });
+  const [assignment, setAssignment] = useState({
+    unassigned_count: 0, total_unassigned_count: 0, unassigned: [], setters: [],
+    available_countries: [], available_niches: [],
+  });
+  const [assignmentFilters, setAssignmentFilters] = useState({ country_code: '', niche: '' });
   const [selectedSetters, setSelectedSetters] = useState([]);
   const [assignmentLoading, setAssignmentLoading] = useState(false);
   const [assignmentSaving, setAssignmentSaving] = useState(false);
@@ -169,13 +173,19 @@ export default function Focus() {
   const canWorkCurrent = Boolean(current && currentOwnerId && currentOwnerId === String(profile?.id || ''));
   const supervisionOnly = Boolean(current && !canWorkCurrent);
 
-  const openAssignment = async () => {
-    setShowAssignment(true);
+  const loadAssignment = async (countryCode = '', niche = '') => {
     setAssignmentLoading(true);
     setError('');
     try {
-      const data = await api('/api/focus/assignment');
+      const params = new URLSearchParams();
+      if (countryCode) params.set('country_code', countryCode);
+      if (niche) params.set('niche', niche);
+      const data = await api(`/api/focus/assignment${params.size ? `?${params.toString()}` : ''}`);
       setAssignment(data);
+      setAssignmentFilters({
+        country_code: data.selected_country_code || countryCode,
+        niche: data.selected_niche || niche,
+      });
       setSelectedSetters((current) => {
         const activeIds = new Set((data.setters || []).map((item) => item.id));
         const preserved = current.filter((id) => activeIds.has(id));
@@ -183,9 +193,35 @@ export default function Focus() {
       });
     } catch (e) {
       setError(e.message);
-      setShowAssignment(false);
+      throw e;
     } finally {
       setAssignmentLoading(false);
+    }
+  };
+
+  const openAssignment = async () => {
+    setShowAssignment(true);
+    try {
+      await loadAssignment();
+    } catch (e) {
+      setError(e.message);
+      setShowAssignment(false);
+    }
+  };
+
+  const changeAssignmentCountry = async (countryCode) => {
+    try {
+      await loadAssignment(countryCode, '');
+    } catch (e) {
+      setError(e.message);
+    }
+  };
+
+  const changeAssignmentNiche = async (niche) => {
+    try {
+      await loadAssignment(assignmentFilters.country_code, niche);
+    } catch (e) {
+      setError(e.message);
     }
   };
 
@@ -196,6 +232,10 @@ export default function Focus() {
   };
 
   const distributeLeads = async () => {
+    if (!assignmentFilters.country_code || !assignmentFilters.niche) {
+      setError('Selecciona el país y el nicho antes de repartir los leads.');
+      return;
+    }
     if (!selectedSetters.length) {
       setError('Selecciona al menos un setter para repartir los leads.');
       return;
@@ -205,16 +245,19 @@ export default function Focus() {
     try {
       const result = await api('/api/focus/assignment', {
         method: 'POST',
-        body: JSON.stringify({ setter_ids: selectedSetters, strategy: 'round_robin' }),
+        body: JSON.stringify({
+          setter_ids: selectedSetters,
+          country_code: assignmentFilters.country_code,
+          niche: assignmentFilters.niche,
+          strategy: 'round_robin',
+        }),
       });
       const detail = (result.distribution || [])
         .filter((item) => item.assigned > 0)
         .map((item) => `${item.setter_name}: ${item.assigned}`)
         .join(' · ');
       setSuccess(`${result.assigned} leads repartidos${detail ? ` · ${detail}` : ''}.`);
-      const refreshed = await api('/api/focus/assignment');
-      setAssignment(refreshed);
-      if (!refreshed.unassigned_count) setShowAssignment(false);
+      await loadAssignment(assignmentFilters.country_code, assignmentFilters.niche);
       await load(scope, bucket, followupDate);
     } catch (e) {
       setError(e.message);
@@ -436,13 +479,36 @@ export default function Focus() {
               <div className="focus-assignment-loading"><Sparkles size={19} />Preparando el reparto…</div>
             ) : (
               <>
+                <section className="focus-assignment-filters" aria-label="Filtrar leads para repartir">
+                  <div>
+                    <strong>Elige la cola que vas a repartir</strong>
+                    <small>País y nicho se aplican antes de seleccionar al equipo.</small>
+                  </div>
+                  <div className="focus-assignment-filter-grid">
+                    <label>País
+                      <select value={assignmentFilters.country_code} onChange={(event) => changeAssignmentCountry(event.target.value)} disabled={assignmentSaving}>
+                        {(assignment.available_countries || []).map((country) => (
+                          <option key={country.code} value={country.code}>{country.name} · {country.count}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>Nicho
+                      <select value={assignmentFilters.niche} onChange={(event) => changeAssignmentNiche(event.target.value)} disabled={assignmentSaving || !(assignment.available_niches || []).length}>
+                        {(assignment.available_niches || []).map((item) => (
+                          <option key={item.name} value={item.name}>{item.name} · {item.count}</option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                </section>
+
                 <div className="focus-assignment-total">
-                  <span>Sin asignar</span><strong>{assignment.unassigned_count || 0}</strong><small>leads nuevos listos para repartir</small>
+                  <span>Cola seleccionada</span><strong>{assignment.unassigned_count || 0}</strong><small>{assignmentFilters.niche || 'Sin nicho'} · {assignment.total_unassigned_count || 0} sin asignar en total</small>
                 </div>
 
                 <section className="focus-assignment-section">
                   <div className="focus-assignment-section-title">
-                    <div><strong>¿Quiénes trabajarán esta cola?</strong><small>El reparto equilibra la cantidad actual de nuevos.</small></div>
+                    <div><strong>¿Quiénes trabajarán esta cola?</strong><small>Solo aparecen agentes habilitados para el país seleccionado.</small></div>
                     <button type="button" onClick={() => setSelectedSetters((assignment.setters || []).map((item) => item.id))}>Seleccionar todos</button>
                   </div>
                   <div className="focus-setter-grid">
@@ -452,7 +518,7 @@ export default function Focus() {
                         <label key={setter.id} className={`focus-setter-option ${checked ? 'selected' : ''}`}>
                           <input type="checkbox" checked={checked} onChange={() => toggleSetter(setter.id)} />
                           <span><UserCheck size={18} /></span>
-                          <div><strong>{setter.full_name}</strong><small>{setter.new_leads || 0} nuevos asignados ahora</small></div>
+                          <div><strong>{setter.full_name}</strong><small>{setter.new_leads || 0} de este país y nicho · {setter.operating_country === 'ALL' ? 'Todos los países' : setter.operating_country}</small></div>
                         </label>
                       );
                     })}
@@ -464,7 +530,7 @@ export default function Focus() {
                     <div className="focus-assignment-section-title"><div><strong>Primeros leads del reparto</strong><small>Se ordenan por score para mezclarlos de forma equilibrada.</small></div></div>
                     <div className="focus-unassigned-preview">
                       {assignment.unassigned.slice(0, 8).map((lead) => (
-                        <div key={lead.id}><span>{lead.business_name}</span><small>Tier {lead.final_tier || '—'} · {lead.final_score || 0} pts</small></div>
+                        <div key={lead.id}><span>{lead.business_name}</span><small>{lead.country_name} · Tier {lead.final_tier || '—'} · {lead.final_score || 0} pts</small></div>
                       ))}
                     </div>
                   </section>
@@ -472,7 +538,7 @@ export default function Focus() {
 
                 <footer>
                   <button type="button" className="button secondary" onClick={() => setShowAssignment(false)} disabled={assignmentSaving}>Cancelar</button>
-                  <button type="button" className="button primary" onClick={distributeLeads} disabled={assignmentSaving || !assignment.unassigned_count || !selectedSetters.length}>
+                  <button type="button" className="button primary" onClick={distributeLeads} disabled={assignmentSaving || !assignment.unassigned_count || !selectedSetters.length || !assignmentFilters.country_code || !assignmentFilters.niche}>
                     <UsersRound size={18} />{assignmentSaving ? 'Repartiendo…' : `Repartir ${assignment.unassigned_count || 0} leads`}
                   </button>
                 </footer>

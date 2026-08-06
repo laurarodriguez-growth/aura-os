@@ -3705,6 +3705,25 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   gap: .6rem;
   color: var(--muted);
 }
+.focus-assignment-filters {
+  display: grid;
+  gap: .75rem;
+  margin-top: 1rem;
+  padding: .9rem;
+  border: 1px solid rgba(var(--accent-rgb), .26);
+  border-radius: 14px;
+  background: rgba(var(--accent-rgb), .055);
+}
+.focus-assignment-filters > div:first-child { display: grid; gap: .16rem; }
+.focus-assignment-filters strong { font-size: .82rem; }
+.focus-assignment-filters small { color: var(--muted); font-size: .66rem; }
+.focus-assignment-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: .65rem;
+}
+.focus-assignment-filter-grid label { margin: 0; }
+.focus-assignment-filter-grid select { margin-top: .32rem; }
 .focus-assignment-total {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -3842,6 +3861,7 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
     padding: .9rem;
   }
   .focus-setter-grid { grid-template-columns: 1fr; }
+  .focus-assignment-filter-grid { grid-template-columns: 1fr; }
   .focus-assignment-section-title { align-items: flex-start; }
   .focus-assignment-panel > footer {
     bottom: -.9rem;

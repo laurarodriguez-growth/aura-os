@@ -1561,6 +1561,8 @@ def step_search_job(
 @app.get("/api/focus/assignment")
 def focus_assignment_overview(
     user: Annotated[CurrentUser, Depends(require_admin)],
+    country_code: str | None = Query(default=None, min_length=2, max_length=2),
+    niche: str | None = Query(default=None, min_length=1, max_length=120),
 ) -> dict[str, Any]:
     profiles = [
         row for row in _fetch_all("profiles", "id,full_name,role,is_active,operating_country")
@@ -1568,10 +1570,50 @@ def focus_assignment_overview(
     ]
     leads = _fetch_all("leads")
     new_leads = [lead for lead in leads if _is_fresh_new_lead(lead)]
-    unassigned = [lead for lead in new_leads if not lead.get("owner_id")]
+    all_unassigned = [lead for lead in new_leads if not lead.get("owner_id")]
+
+    country_counts: dict[str, int] = {}
+    for lead in all_unassigned:
+        code = _normalized_country(lead.get("country_code"))
+        country_counts[code] = country_counts.get(code, 0) + 1
+    available_countries = [{
+        "code": code,
+        "name": COUNTRIES.get(code, {}).get("name") or code,
+        "count": country_counts[code],
+    } for code in COUNTRIES if code in country_counts]
+    available_countries.extend({
+        "code": code,
+        "name": code,
+        "count": count,
+    } for code, count in sorted(country_counts.items()) if code not in COUNTRIES)
+
+    selected_country = _normalized_country(country_code) if country_code else (
+        available_countries[0]["code"] if available_countries else "PA"
+    )
+    country_unassigned = [
+        lead for lead in all_unassigned
+        if _normalized_country(lead.get("country_code")) == selected_country
+    ]
+    niche_counts: dict[str, int] = {}
+    for lead in country_unassigned:
+        lead_niche = str(lead.get("niche") or "Sin nicho").strip() or "Sin nicho"
+        niche_counts[lead_niche] = niche_counts.get(lead_niche, 0) + 1
+    available_niches = [
+        {"name": name, "count": count}
+        for name, count in sorted(niche_counts.items(), key=lambda item: (-item[1], item[0].casefold()))
+    ]
+    selected_niche = str(niche or "").strip() or (available_niches[0]["name"] if available_niches else "")
+    unassigned = [
+        lead for lead in country_unassigned
+        if str(lead.get("niche") or "Sin nicho").strip().casefold() == selected_niche.casefold()
+    ] if selected_niche else []
 
     assigned_counts: dict[str, int] = {}
     for lead in new_leads:
+        if _normalized_country(lead.get("country_code")) != selected_country:
+            continue
+        if selected_niche and str(lead.get("niche") or "Sin nicho").strip().casefold() != selected_niche.casefold():
+            continue
         owner_id = str(lead.get("owner_id") or "")
         if owner_id:
             assigned_counts[owner_id] = assigned_counts.get(owner_id, 0) + 1
@@ -1582,7 +1624,9 @@ def focus_assignment_overview(
         "role": profile.get("role") or "agent",
         "operating_country": _normalized_country(profile.get("operating_country"), "ALL" if profile.get("role") == "admin" else "PA"),
         "new_leads": assigned_counts.get(str(profile.get("id") or ""), 0),
-    } for profile in profiles if profile.get("id")]
+    } for profile in profiles if profile.get("id") and _normalized_country(
+        profile.get("operating_country"), "ALL" if profile.get("role") == "admin" else "PA",
+    ) in {"ALL", selected_country}]
     setters.sort(key=lambda item: (item["new_leads"], item["full_name"].lower()))
 
     unassigned.sort(key=lambda item: (
@@ -1595,14 +1639,22 @@ def focus_assignment_overview(
         "final_tier": item.get("final_tier"),
         "final_score": item.get("final_score"),
         "address": item.get("address"),
+        "niche": item.get("niche") or "Sin nicho",
         "country_code": _normalized_country(item.get("country_code")),
-        "country_name": item.get("country_name") or "Panamá",
+        "country_name": item.get("country_name") or COUNTRIES.get(
+            _normalized_country(item.get("country_code")), {},
+        ).get("name") or _normalized_country(item.get("country_code")),
     } for item in unassigned[:100]]
 
     return {
         "unassigned_count": len(unassigned),
+        "total_unassigned_count": len(all_unassigned),
         "unassigned": preview,
         "setters": setters,
+        "selected_country_code": selected_country,
+        "selected_niche": selected_niche,
+        "available_countries": available_countries,
+        "available_niches": available_niches,
         "generated_at": datetime.now(PANAMA_TZ).isoformat(),
     }
 
@@ -1613,6 +1665,10 @@ def distribute_focus_leads(
     user: Annotated[CurrentUser, Depends(require_admin)],
 ) -> dict[str, Any]:
     db = get_supabase()
+    selected_country = _normalized_country(payload.country_code)
+    selected_niche = payload.niche.strip()
+    if not selected_niche:
+        raise HTTPException(status_code=422, detail="Selecciona un nicho para repartir los leads")
     requested_setter_ids = list(dict.fromkeys(str(item).strip() for item in payload.setter_ids if str(item).strip()))
     if not requested_setter_ids:
         raise HTTPException(status_code=422, detail="Selecciona al menos un setter para repartir los leads")
@@ -1625,14 +1681,32 @@ def distribute_focus_leads(
     invalid_setters = [setter_id for setter_id in requested_setter_ids if setter_id not in profile_map]
     if invalid_setters:
         raise HTTPException(status_code=422, detail="Uno de los setters seleccionados no está activo")
+    incompatible_setters = [
+        setter_id for setter_id in requested_setter_ids
+        if _normalized_country(
+            profile_map[setter_id].get("operating_country"),
+            "ALL" if profile_map[setter_id].get("role") == "admin" else "PA",
+        ) not in {"ALL", selected_country}
+    ]
+    if incompatible_setters:
+        raise HTTPException(status_code=422, detail="Uno de los setters seleccionados no trabaja el país elegido")
 
     all_leads = _fetch_all("leads")
-    candidates = [lead for lead in all_leads if _is_fresh_new_lead(lead) and not lead.get("owner_id")]
+    candidates = [
+        lead for lead in all_leads
+        if _is_fresh_new_lead(lead)
+        and not lead.get("owner_id")
+        and _normalized_country(lead.get("country_code")) == selected_country
+        and str(lead.get("niche") or "Sin nicho").strip().casefold() == selected_niche.casefold()
+    ]
     requested_lead_ids = set(str(item).strip() for item in payload.lead_ids if str(item).strip())
     if requested_lead_ids:
         candidates = [lead for lead in candidates if str(lead.get("id") or "") in requested_lead_ids]
     if not candidates:
-        return {"assigned": 0, "remaining_unassigned": 0, "distribution": []}
+        return {
+            "assigned": 0, "remaining_unassigned": 0, "distribution": [],
+            "country_code": selected_country, "niche": selected_niche,
+        }
 
     candidates.sort(key=lambda item: (
         int(item.get("final_score") or 0),
@@ -1642,7 +1716,12 @@ def distribute_focus_leads(
     current_load = {setter_id: 0 for setter_id in requested_setter_ids}
     for lead in all_leads:
         owner_id = str(lead.get("owner_id") or "")
-        if owner_id in current_load and _is_fresh_new_lead(lead):
+        if (
+            owner_id in current_load
+            and _is_fresh_new_lead(lead)
+            and _normalized_country(lead.get("country_code")) == selected_country
+            and str(lead.get("niche") or "Sin nicho").strip().casefold() == selected_niche.casefold()
+        ):
             current_load[owner_id] += 1
 
     order = {setter_id: index for index, setter_id in enumerate(requested_setter_ids)}
@@ -1681,7 +1760,13 @@ def distribute_focus_leads(
             {"owner_id": setter_id, "assigned_by": user.id},
         )
 
-    remaining = sum(1 for lead in _fetch_all("leads") if _is_fresh_new_lead(lead) and not lead.get("owner_id"))
+    remaining = sum(
+        1 for lead in _fetch_all("leads")
+        if _is_fresh_new_lead(lead)
+        and not lead.get("owner_id")
+        and _normalized_country(lead.get("country_code")) == selected_country
+        and str(lead.get("niche") or "Sin nicho").strip().casefold() == selected_niche.casefold()
+    )
     result_distribution = [{
         "setter_id": setter_id,
         "setter_name": profile_map[setter_id].get("full_name") or "Usuario",
@@ -1691,6 +1776,8 @@ def distribute_focus_leads(
     return {
         "assigned": assigned,
         "remaining_unassigned": remaining,
+        "country_code": selected_country,
+        "niche": selected_niche,
         "distribution": result_distribution,
     }
 

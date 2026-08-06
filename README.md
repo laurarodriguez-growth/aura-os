@@ -37,6 +37,9 @@ Para instalar la consolidación segura de duplicados y la edición de WhatsApp y
 Para publicar la versión consolidada sin reactivar una compilación anterior, abre
 [PUBLICAR_VERSION_V10.md](PUBLICAR_VERSION_V10.md).
 
+Para instalar el reparto por país y nicho, abre
+[PUBLICAR_VERSION_V11.md](PUBLICAR_VERSION_V11.md).
+
 ## Seguridad
 
 Nunca subas estas claves a GitHub:

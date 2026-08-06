@@ -129,6 +129,8 @@ class DuplicateLeadMergeRequest(BaseModel):
 class FocusAssignmentRequest(BaseModel):
     setter_ids: list[str] = Field(min_length=1, max_length=50)
     lead_ids: list[str] = Field(default_factory=list, max_length=1000)
+    country_code: str = Field(min_length=2, max_length=2)
+    niche: str = Field(min_length=1, max_length=120)
     strategy: Literal["round_robin"] = "round_robin"
 
 
