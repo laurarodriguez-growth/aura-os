@@ -46,7 +46,7 @@ jobs:
         run: pnpm run build
 
       - name: Preparar archivos de GitHub Pages
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           path: frontend/dist
 
