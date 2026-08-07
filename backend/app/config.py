@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     def origins(self) -> list[str]:
         return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() == "production"
+
 
 @lru_cache
 def get_settings() -> Settings:

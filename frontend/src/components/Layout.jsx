@@ -43,6 +43,7 @@ const adminLinks = [
 const diagnoseLinks = [
   { to: '/diagnose', label: 'Inicio', icon: LayoutDashboard, end: true },
   { to: '/diagnose/new', label: 'Nuevo diagnóstico', icon: ClipboardPlus },
+  { to: '/diagnose/prediagnoses', label: 'Pre-Diagnósticos', icon: FileSearch },
   { to: '/diagnose/list', label: 'Diagnósticos', icon: FolderSearch },
   { to: '/diagnose/reports', label: 'Informes', icon: FileText },
 ];
@@ -312,6 +313,7 @@ export default function Layout({ children }) {
         <nav className="mobile-bottom-nav diagnose-mobile-nav" aria-label="Navegación móvil de Diagnose">
           <NavLink end to="/diagnose" className={({ isActive }) => (isActive ? 'active' : '')}><LayoutDashboard size={19} /><span>Inicio</span></NavLink>
           <NavLink to="/diagnose/new" className={({ isActive }) => (isActive ? 'active' : '')}><ClipboardPlus size={19} /><span>Nuevo</span></NavLink>
+          <NavLink to="/diagnose/prediagnoses" className={({ isActive }) => (isActive ? 'active' : '')}><FileSearch size={19} /><span>Pre-Diag</span></NavLink>
           <NavLink to="/diagnose/list" className={({ isActive }) => (isActive ? 'active' : '')}><FileSearch size={19} /><span>Diagnósticos</span></NavLink>
           <NavLink to="/diagnose/reports" className={({ isActive }) => (isActive ? 'active' : '')}><FileText size={19} /><span>Informes</span></NavLink>
         </nav>

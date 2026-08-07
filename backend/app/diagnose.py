@@ -10,7 +10,14 @@ import requests
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel, Field
 
-from .auth import CurrentUser, get_current_user, require_diagnose
+from .auth import (
+    CurrentUser,
+    diagnosis_assignee_for_create,
+    enforce_diagnosis_access,
+    get_current_user,
+    require_diagnose,
+    sanitize_diagnosis_update,
+)
 from .config import get_settings
 from .db import get_supabase
 from .diagnose_analysis import analyze_corpus
@@ -272,10 +279,11 @@ def _analysis_block_key(question: dict[str, Any]) -> str:
     return {"icp": "icp_service", "conversion": "inquiry_journey", "process": "team_responsibilities", "automation": "automation_validation"}.get(str(question.get("section")), "objective_direction")
 
 
-def _require_diagnosis(diagnosis_id: str) -> dict[str, Any]:
+def _require_diagnosis(diagnosis_id: str, user: CurrentUser) -> dict[str, Any]:
     row = _first(get_supabase().table("diagnoses").select("*").eq("id", diagnosis_id).limit(1).execute())
     if not row:
         raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    enforce_diagnosis_access(user, row)
     return row
 
 
@@ -293,9 +301,9 @@ def _profiles_map() -> dict[str, str]:
     return {str(row["id"]): row.get("full_name") or "Usuario" for row in rows}
 
 
-def _full_diagnosis(diagnosis_id: str) -> dict[str, Any]:
+def _full_diagnosis(diagnosis_id: str, user: CurrentUser) -> dict[str, Any]:
     db = get_supabase()
-    diagnosis = _require_diagnosis(diagnosis_id)
+    diagnosis = _require_diagnosis(diagnosis_id, user)
     assessments = db.table("diagnosis_assessments").select("*").eq("diagnosis_id", diagnosis_id).execute().data or []
     evidence = db.table("diagnosis_evidence").select("*").eq("diagnosis_id", diagnosis_id).order("created_at", desc=True).execute().data or []
     findings = db.table("diagnosis_findings").select("*").eq("diagnosis_id", diagnosis_id).order("priority", desc=True).order("created_at", desc=True).execute().data or []
@@ -370,17 +378,31 @@ def diagnosis_templates(user: Annotated[CurrentUser, Depends(require_diagnose)])
 @router.get("/diagnose/summary")
 def diagnosis_summary(user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
     db = get_supabase()
-    rows = db.table("diagnoses").select("id,status,overall_score,overall_level,updated_at").neq("status", "archived").execute().data or []
-    findings = db.table("diagnosis_findings").select("id,impact,status").in_("status", ["open", "sent_to_focus"]).execute().data or []
-    tasks = db.table("focus_tasks").select("id,status").in_("status", ["pending", "in_progress"]).execute().data or []
-    reports = db.table("diagnosis_reports").select("id", count="exact").execute()
-    recent = db.table("diagnoses").select("id,company_name,industry,status,overall_score,overall_level,updated_at").neq("status", "archived").order("updated_at", desc=True).limit(6).execute().data or []
+    diagnosis_query = db.table("diagnoses").select("id,status,overall_score,overall_level,updated_at").neq("status", "archived")
+    if user.role != "admin":
+        diagnosis_query = diagnosis_query.eq("assigned_to", user.id)
+    rows = diagnosis_query.execute().data or []
+    diagnosis_ids = [row["id"] for row in rows]
+    findings = (
+        db.table("diagnosis_findings").select("id,impact,status").in_("diagnosis_id", diagnosis_ids).in_("status", ["open", "sent_to_focus"]).execute().data or []
+    ) if diagnosis_ids else []
+    task_query = db.table("focus_tasks").select("id,status").in_("status", ["pending", "in_progress"])
+    if user.role != "admin":
+        task_query = task_query.eq("assigned_to", user.id)
+    tasks = task_query.execute().data or []
+    reports_count = int(
+        db.table("diagnosis_reports").select("id", count="exact").in_("diagnosis_id", diagnosis_ids).execute().count or 0
+    ) if diagnosis_ids else 0
+    recent_query = db.table("diagnoses").select("id,company_name,industry,status,overall_score,overall_level,updated_at").neq("status", "archived")
+    if user.role != "admin":
+        recent_query = recent_query.eq("assigned_to", user.id)
+    recent = recent_query.order("updated_at", desc=True).limit(6).execute().data or []
     return {
         "active": sum(1 for row in rows if row.get("status") in {"draft", "in_progress"}),
         "completed": sum(1 for row in rows if row.get("status") == "completed"),
         "critical_findings": sum(1 for row in findings if row.get("impact") == "critical" and row.get("status") == "open"),
         "focus_actions": len(tasks),
-        "reports": int(reports.count or 0),
+        "reports": reports_count,
         "recent": recent,
     }
 
@@ -390,7 +412,7 @@ def create_diagnosis(payload: DiagnosisCreate, user: Annotated[CurrentUser, Depe
     db = get_supabase()
     data = payload.model_dump(exclude_none=True)
     data["created_by"] = user.id
-    data["assigned_to"] = data.get("assigned_to") or user.id
+    data["assigned_to"] = diagnosis_assignee_for_create(user, data.get("assigned_to"))
     result = _first(db.table("diagnoses").insert(data).execute())
     if not result:
         raise HTTPException(status_code=500, detail="No se pudo crear el diagnóstico")
@@ -407,6 +429,8 @@ def list_diagnoses(
 ) -> dict[str, Any]:
     start = (page - 1) * page_size
     query = get_supabase().table("diagnoses").select("*", count="exact")
+    if user.role != "admin":
+        query = query.eq("assigned_to", user.id)
     if status:
         query = query.eq("status", status)
     else:
@@ -423,7 +447,13 @@ def list_diagnoses(
 @router.get("/diagnose/reports")
 def list_diagnosis_reports(user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
     db = get_supabase()
-    reports = db.table("diagnosis_reports").select("*").order("created_at", desc=True).limit(200).execute().data or []
+    diagnosis_query = db.table("diagnoses").select("id")
+    if user.role != "admin":
+        diagnosis_query = diagnosis_query.eq("assigned_to", user.id)
+    allowed_ids = [row["id"] for row in (diagnosis_query.execute().data or [])]
+    if not allowed_ids:
+        return {"items": []}
+    reports = db.table("diagnosis_reports").select("*").in_("diagnosis_id", allowed_ids).order("created_at", desc=True).limit(200).execute().data or []
     diagnosis_ids = list({row.get("diagnosis_id") for row in reports if row.get("diagnosis_id")})
     names: dict[str, dict[str, Any]] = {}
     if diagnosis_ids:
@@ -436,7 +466,7 @@ def list_diagnosis_reports(user: Annotated[CurrentUser, Depends(require_diagnose
 
 @router.get("/diagnose/{diagnosis_id}")
 def get_diagnosis(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    diagnosis = _full_diagnosis(diagnosis_id)
+    diagnosis = _full_diagnosis(diagnosis_id, user)
     if user.role != "admin":
         diagnosis["evidence"] = []
         diagnosis["evidence_restricted"] = True
@@ -445,14 +475,14 @@ def get_diagnosis(diagnosis_id: str, user: Annotated[CurrentUser, Depends(requir
 
 @router.patch("/diagnose/{diagnosis_id}")
 def update_diagnosis(payload: DiagnosisUpdate, diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
-    data = payload.model_dump(exclude_unset=True)
+    _require_diagnosis(diagnosis_id, user)
+    data = sanitize_diagnosis_update(user, payload.model_dump(exclude_unset=True))
     if data.get("status") == "completed":
         data["completed_at"] = _now_iso()
     elif data.get("status") and data["status"] != "completed":
         data["completed_at"] = None
     result = _first(get_supabase().table("diagnoses").update(data).eq("id", diagnosis_id).execute())
-    return result or _require_diagnosis(diagnosis_id)
+    return result or _require_diagnosis(diagnosis_id, user)
 
 
 @router.put("/diagnose/{diagnosis_id}/assessments/{section}")
@@ -462,7 +492,7 @@ def save_assessment(
     payload: AssessmentSave,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     template = ASSESSMENT_TEMPLATES.get(section)
     if not template:
         raise HTTPException(status_code=404, detail="Sección de evaluación no válida")
@@ -510,7 +540,7 @@ def save_assessment(
 
 @router.post("/diagnose/{diagnosis_id}/generate-findings")
 def generate_findings(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     block_evaluations = db.table("diagnosis_block_evaluations").select("*").eq("diagnosis_id", diagnosis_id).execute().data or []
     created = 0
@@ -583,12 +613,12 @@ def generate_findings(diagnosis_id: str, user: Annotated[CurrentUser, Depends(re
             else:
                 db.table("diagnosis_findings").insert(data).execute()
                 created += 1
-    return {"created": created, "updated": updated, "findings": _full_diagnosis(diagnosis_id)["findings"]}
+    return {"created": created, "updated": updated, "findings": _full_diagnosis(diagnosis_id, user)["findings"]}
 
 
 @router.post("/diagnose/{diagnosis_id}/findings", status_code=201)
 def create_finding(diagnosis_id: str, payload: FindingCreate, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     data = payload.model_dump(exclude_none=True)
     data.update({"diagnosis_id": diagnosis_id, "created_by": user.id})
     if "priority" not in data:
@@ -598,21 +628,21 @@ def create_finding(diagnosis_id: str, payload: FindingCreate, user: Annotated[Cu
 
 @router.patch("/diagnose/{diagnosis_id}/findings/{finding_id}")
 def update_finding(diagnosis_id: str, finding_id: str, payload: FindingUpdate, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     data = payload.model_dump(exclude_unset=True)
     return _first(get_supabase().table("diagnosis_findings").update(data).eq("id", finding_id).eq("diagnosis_id", diagnosis_id).execute()) or {}
 
 
 @router.delete("/diagnose/{diagnosis_id}/findings/{finding_id}")
 def delete_finding(diagnosis_id: str, finding_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, bool]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     get_supabase().table("diagnosis_findings").delete().eq("id", finding_id).eq("diagnosis_id", diagnosis_id).execute()
     return {"deleted": True}
 
 
 @router.post("/diagnose/{diagnosis_id}/generate-roadmap")
 def generate_roadmap(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     findings = db.table("diagnosis_findings").select("*").eq("diagnosis_id", diagnosis_id).eq("status", "open").order("priority", desc=True).execute().data or []
     existing = db.table("diagnosis_roadmap").select("finding_id").eq("diagnosis_id", diagnosis_id).execute().data or []
@@ -641,12 +671,12 @@ def generate_roadmap(diagnosis_id: str, user: Annotated[CurrentUser, Depends(req
             "order_index": index,
         }).execute()
         created += 1
-    return {"created": created, "roadmap": _full_diagnosis(diagnosis_id)["roadmap"]}
+    return {"created": created, "roadmap": _full_diagnosis(diagnosis_id, user)["roadmap"]}
 
 
 @router.post("/diagnose/{diagnosis_id}/roadmap", status_code=201)
 def create_roadmap_item(diagnosis_id: str, payload: RoadmapCreate, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     data = payload.model_dump(exclude_none=True)
     data["diagnosis_id"] = diagnosis_id
     data["owner_id"] = data.get("owner_id") or user.id
@@ -655,14 +685,14 @@ def create_roadmap_item(diagnosis_id: str, payload: RoadmapCreate, user: Annotat
 
 @router.patch("/diagnose/{diagnosis_id}/roadmap/{item_id}")
 def update_roadmap_item(diagnosis_id: str, item_id: str, payload: RoadmapUpdate, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     data = payload.model_dump(exclude_unset=True)
     return _first(get_supabase().table("diagnosis_roadmap").update(data).eq("id", item_id).eq("diagnosis_id", diagnosis_id).execute()) or {}
 
 
 @router.delete("/diagnose/{diagnosis_id}/roadmap/{item_id}")
 def delete_roadmap_item(diagnosis_id: str, item_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, bool]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     get_supabase().table("diagnosis_roadmap").delete().eq("id", item_id).eq("diagnosis_id", diagnosis_id).execute()
     return {"deleted": True}
 
@@ -674,7 +704,7 @@ def send_roadmap_to_focus(
     payload: SendToFocus,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    diagnosis = _require_diagnosis(diagnosis_id)
+    diagnosis = _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     item = _first(db.table("diagnosis_roadmap").select("*").eq("id", item_id).eq("diagnosis_id", diagnosis_id).limit(1).execute())
     if not item:
@@ -723,7 +753,7 @@ def create_evidence(
     file: UploadFile | None = File(None),
 ) -> dict[str, Any]:
     _require_evidence_admin(user)
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     if evidence_type not in {"file", "link", "note"}:
         raise HTTPException(status_code=400, detail="Tipo de evidencia no válido")
     data: dict[str, Any] = {
@@ -799,7 +829,7 @@ def open_evidence(evidence_id: str, user: Annotated[CurrentUser, Depends(require
 @router.delete("/diagnose/{diagnosis_id}/evidence/{evidence_id}")
 def delete_evidence(diagnosis_id: str, evidence_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, bool]:
     _require_evidence_admin(user)
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     row = _first(db.table("diagnosis_evidence").select("*").eq("id", evidence_id).eq("diagnosis_id", diagnosis_id).limit(1).execute())
     if not row:
@@ -822,7 +852,7 @@ def analyze_diagnosis_evidence(
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
     _require_evidence_admin(user)
-    diagnosis = _require_diagnosis(diagnosis_id)
+    diagnosis = _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     evidence = (
         db.table("diagnosis_evidence")
@@ -899,7 +929,7 @@ def get_diagnosis_analysis(
     diagnosis_id: str,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     analysis = _first(
         db.table("diagnosis_analysis_runs")
@@ -927,7 +957,7 @@ def create_interview_question(
     payload: InterviewQuestionCreate,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     key = f"manual-{uuid4().hex}"
     return _first(get_supabase().table("diagnosis_interview_questions").insert({
         "diagnosis_id": diagnosis_id,
@@ -949,7 +979,7 @@ def update_interview_question(
     payload: InterviewQuestionUpdate,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     db = get_supabase()
     existing = _first(
         db.table("diagnosis_interview_questions")
@@ -988,14 +1018,14 @@ def delete_interview_question(
     question_id: str,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, bool]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     get_supabase().table("diagnosis_interview_questions").delete().eq("id", question_id).eq("diagnosis_id", diagnosis_id).execute()
     return {"deleted": True}
 
 
 @router.post("/diagnose/{diagnosis_id}/reports", status_code=201)
 def create_report_snapshot(diagnosis_id: str, user: Annotated[CurrentUser, Depends(require_diagnose)]) -> dict[str, Any]:
-    diagnosis = _full_diagnosis(diagnosis_id)
+    diagnosis = _full_diagnosis(diagnosis_id, user)
     db = get_supabase()
     count_response = db.table("diagnosis_reports").select("id", count="exact").eq("diagnosis_id", diagnosis_id).execute()
     version = int(count_response.count or 0) + 1

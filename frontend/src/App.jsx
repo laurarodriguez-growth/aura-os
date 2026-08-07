@@ -21,6 +21,7 @@ import Diagnoses from './pages/Diagnoses';
 import DiagnosisWorkspace from './pages/DiagnosisWorkspace';
 import DiagnosisReport from './pages/DiagnosisReport';
 import DiagnoseReports from './pages/DiagnoseReports';
+import Prediagnoses from './pages/Prediagnoses';
 
 function ProtectedApp() {
   const { session, profile, loading, profileError } = useAuth();
@@ -48,6 +49,7 @@ function ProtectedApp() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/diagnose" element={diagnoseEnabled ? <DiagnoseHome /> : <Navigate to="/focus" replace />} />
         <Route path="/diagnose/new" element={diagnoseEnabled ? <DiagnoseNew /> : <Navigate to="/focus" replace />} />
+        <Route path="/diagnose/prediagnoses" element={diagnoseEnabled ? <Prediagnoses /> : <Navigate to="/focus" replace />} />
         <Route path="/diagnose/list" element={diagnoseEnabled ? <Diagnoses /> : <Navigate to="/focus" replace />} />
         <Route path="/diagnose/reports" element={diagnoseEnabled ? <DiagnoseReports /> : <Navigate to="/focus" replace />} />
         <Route path="/diagnose/:diagnosisId/report/print" element={diagnoseEnabled ? <DiagnosisReport /> : <Navigate to="/focus" replace />} />
