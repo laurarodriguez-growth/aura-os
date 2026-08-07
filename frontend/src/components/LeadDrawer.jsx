@@ -255,6 +255,13 @@ export default function LeadDrawer({ leadId, statuses, profiles, onClose, onChan
                   <div><small>Estado de conversación</small><strong>{conversationLabel(form.conversation_status)}</strong></div>
                   <div><small>Outcome</small><strong>{form.outcome || 'Pendiente'}</strong></div>
                   <div><small>Próximo seguimiento</small><strong>{formatFollowupDate(form.next_followup_date)}</strong></div>
+                  <div className="prediagnosis-lead-indicator">
+                    <small>Pre-Diagnóstico AURA</small>
+                    <strong>{lead.has_prediagnosis ? 'Sí' : 'No'}</strong>
+                    {lead.has_prediagnosis && lead.prediagnosis_latest && (
+                      <span>{lead.prediagnosis_latest.probable_leak_area} · {lead.prediagnosis_latest.eligibility === 'eligible' ? 'Elegible' : lead.prediagnosis_latest.eligibility === 'needs_more_info' ? 'Falta información' : 'No listo'}</span>
+                    )}
+                  </div>
                 </div>
               </section>
 

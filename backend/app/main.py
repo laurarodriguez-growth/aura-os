@@ -24,6 +24,7 @@ from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, 
 from .google_places import (
     autocomplete_places, build_queries, is_hard_excluded, place_details, place_to_lead, search_text,
 )
+from .prediagnosis import router as prediagnosis_router
 from .outcomes import (
     derive_outcome_stage, get_outcome_definition, router as outcomes_router,
     suggested_followup_date,
@@ -61,6 +62,9 @@ app.add_middleware(
 )
 
 app.include_router(diagnose_definitive_router)
+# Static /api/diagnose/prediagnoses routes must be registered before
+# the dynamic /api/diagnose/{diagnosis_id} route.
+app.include_router(prediagnosis_router)
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
 
@@ -102,7 +106,7 @@ PIPELINE_STAGES = [
     {"key": "responded", "label": "Respondieron", "description": "Conversación abierta"},
     {"key": "interested", "label": "Interesados", "description": "Necesidad confirmada"},
     {"key": "meeting_booked", "label": "Reunión agendada", "description": "Llamada de 15 minutos"},
-    {"key": "diagnosis_sold", "label": "Diagnóstico vendido", "description": "Diagnóstico Premium cerrado"},
+    {"key": "diagnosis_sold", "label": "Diagnóstico vendido", "description": "Diagnóstico AURA cerrado"},
     {"key": "proposal_sent", "label": "Propuesta enviada", "description": "Implementación presentada"},
     {"key": "implementation_sold", "label": "Implementación vendida", "description": "Cliente ganado"},
     {"key": "closed", "label": "Cerrados", "description": "No interesado, no califica o descartado"},
@@ -312,6 +316,11 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     elif has_phone or has_whatsapp:
         score += 2
 
+    if lead.get("has_prediagnosis"):
+        score += 45
+        latest_prediagnosis = lead.get("prediagnosis_latest") or {}
+        reasons.insert(0, f"Completó Pre-Diagnóstico AURA · {latest_prediagnosis.get('probable_leak_area') or 'revisar lectura'}")
+
     if conversation_status == "response_received":
         action = "Responder al lead ahora"
         channel = "WhatsApp" if has_whatsapp else "Llamada"
@@ -340,6 +349,9 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     elif due_state in {"overdue", "today"}:
         action = "Completar seguimiento"
         channel = "WhatsApp" if has_whatsapp and outcome in {"No respondió", "Buzón de voz", "Solicitó información"} else "Llamada"
+    elif lead.get("has_prediagnosis"):
+        action = "Revisar Pre-Diagnóstico y retomar conversación"
+        channel = "WhatsApp" if has_whatsapp else "Llamada"
     elif attempts == 0:
         action = "Realizar primer contacto"
         channel = "Llamada" if has_phone else "WhatsApp"
@@ -1823,8 +1835,20 @@ def aura_focus(
         and (user.role == "admin" or user.operating_country == "ALL" or _normalized_country(lead.get("country_code")) == _normalized_country(user.operating_country))
     )
     all_items: list[dict[str, Any]] = []
+    prediagnosis_rows = _fetch_all("prediagnoses", "lead_id,created_at,probable_leak_area,eligibility")
+    prediagnosis_latest: dict[str, dict[str, Any]] = {}
+    for item in prediagnosis_rows:
+        lead_id = str(item.get("lead_id") or "")
+        if not lead_id:
+            continue
+        current = prediagnosis_latest.get(lead_id)
+        if not current or str(item.get("created_at") or "") > str(current.get("created_at") or ""):
+            prediagnosis_latest[lead_id] = item
 
     for lead in leads:
+        latest_prediagnosis = prediagnosis_latest.get(str(lead.get("id") or ""))
+        lead["has_prediagnosis"] = bool(latest_prediagnosis)
+        lead["prediagnosis_latest"] = latest_prediagnosis
         if user.role != "admin" and user.operating_country != "ALL" and _normalized_country(lead.get("country_code")) != _normalized_country(user.operating_country):
             continue
         owner_id = str(lead.get("owner_id") or "")
@@ -2261,6 +2285,10 @@ def get_lead(lead_id: str, user: Annotated[CurrentUser, Depends(get_current_user
     activities = db.table("activities").select("*").eq("lead_id", lead_id).order("created_at", desc=True).limit(100).execute().data or []
     lead["call_logs"] = calls
     lead["activities"] = activities
+    prediagnoses = db.table("prediagnoses").select("id,created_at,probable_leak_area,secondary_area,eligibility,confidence,next_action").eq("lead_id", lead_id).order("created_at", desc=True).limit(25).execute().data or []
+    lead["has_prediagnosis"] = bool(prediagnoses)
+    lead["prediagnosis_latest"] = prediagnoses[0] if prediagnoses else None
+    lead["prediagnosis_count"] = len(prediagnoses)
     return lead
 
 
