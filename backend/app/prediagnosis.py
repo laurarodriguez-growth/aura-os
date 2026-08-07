@@ -185,8 +185,14 @@ def _normalized_url(value: str | None) -> str | None:
 
 
 def _is_instagram(value: str | None) -> bool:
-    normalized = _normalized_url(value) or ""
-    return "instagram.com/" in normalized
+    normalized = _normalized_url(value)
+    if not normalized:
+        return False
+    try:
+        host = (urlparse(normalized).hostname or "").lower()
+    except Exception:
+        return False
+    return host == "instagram.com" or host.endswith(".instagram.com")
 
 
 def _first(response: Any) -> dict[str, Any] | None:
