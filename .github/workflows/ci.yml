@@ -49,4 +49,4 @@ jobs:
           pip install --require-hashes -r requirements-lock.txt
           pip install -r requirements-dev.txt
       - name: Validar backend
-        run: python -m compileall -q app && pytest -q tests
+        run: python -m compileall -q app && python -m pytest -q tests
