@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from .auth import CurrentUser, require_diagnose
+from .auth import CurrentUser, enforce_diagnosis_access, require_diagnose
 from .db import get_supabase
 
 
@@ -153,10 +153,11 @@ def _first(response: Any) -> dict[str, Any] | None:
     return (response.data or [None])[0]
 
 
-def _require_diagnosis(diagnosis_id: str) -> dict[str, Any]:
+def _require_diagnosis(diagnosis_id: str, user: CurrentUser) -> dict[str, Any]:
     row = _first(get_supabase().table("diagnoses").select("*").eq("id", diagnosis_id).limit(1).execute())
     if not row:
         raise HTTPException(status_code=404, detail="Diagnóstico no encontrado")
+    enforce_diagnosis_access(user, row)
     return row
 
 
@@ -279,9 +280,9 @@ def _report_readiness(
     }
 
 
-def _definitive_payload(diagnosis_id: str, include_evidence: bool) -> dict[str, Any]:
+def _definitive_payload(diagnosis_id: str, user: CurrentUser, include_evidence: bool) -> dict[str, Any]:
     db = get_supabase()
-    diagnosis = _require_diagnosis(diagnosis_id)
+    diagnosis = _require_diagnosis(diagnosis_id, user)
     _seed_core_questions(diagnosis_id)
     evaluations = db.table("diagnosis_block_evaluations").select("*").eq("diagnosis_id", diagnosis_id).execute().data or []
     questions = db.table("diagnosis_interview_questions").select("*").eq("diagnosis_id", diagnosis_id).order("created_at").execute().data or []
@@ -345,7 +346,7 @@ def get_definitive_diagnosis(
     diagnosis_id: str,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    return _definitive_payload(diagnosis_id, include_evidence=user.role == "admin")
+    return _definitive_payload(diagnosis_id, user, include_evidence=user.role == "admin")
 
 
 @router.put("/diagnose/{diagnosis_id}/block-evaluations/{block_key}")
@@ -355,7 +356,7 @@ def save_block_evaluation(
     payload: BlockEvaluationSave,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     block = _block_map().get(block_key)
     if not block:
         raise HTTPException(status_code=404, detail="Bloque de entrevista no válido")
@@ -392,7 +393,7 @@ def update_evidence_governance(
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
     _require_evidence_admin(user)
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     data = payload.model_dump(exclude_unset=True)
     if data.get("requirement_key") and data["requirement_key"] not in {row["key"] for row in EVIDENCE_REQUIREMENTS}:
         raise HTTPException(status_code=400, detail="Evidencia mínima no válida")
@@ -409,7 +410,7 @@ def update_implementation_offer(
     payload: ImplementationUpdate,
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    _require_diagnosis(diagnosis_id)
+    _require_diagnosis(diagnosis_id, user)
     return _first(get_supabase().table("diagnoses").update(payload.model_dump()).eq("id", diagnosis_id).execute()) or {}
 
 
@@ -419,7 +420,7 @@ def create_validated_report(
     report_type: Literal["preliminary", "final"],
     user: Annotated[CurrentUser, Depends(require_diagnose)],
 ) -> dict[str, Any]:
-    payload = _definitive_payload(diagnosis_id, include_evidence=user.role == "admin")
+    payload = _definitive_payload(diagnosis_id, user, include_evidence=user.role == "admin")
     readiness = payload["report_readiness"]
     if report_type == "final" and not readiness["final_ready"]:
         raise HTTPException(status_code=409, detail={"message": "El informe final todavía no cumple las validaciones", **readiness})
