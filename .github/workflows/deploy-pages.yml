@@ -27,16 +27,23 @@ jobs:
       - name: Descargar repositorio
         uses: actions/checkout@v4
 
+      - name: Instalar pnpm fijado
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
+
       - name: Preparar Node
         uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
 
-      - name: Instalar dependencias
-        run: npm install --no-audit --no-fund
+      - name: Instalar dependencias reproducibles
+        run: pnpm install --frozen-lockfile
 
       - name: Construir Aura OS
-        run: npm run build
+        run: pnpm run build
 
       - name: Preparar archivos de GitHub Pages
         uses: actions/upload-pages-artifact@v3

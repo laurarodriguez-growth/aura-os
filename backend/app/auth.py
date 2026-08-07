@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 import requests
 from fastapi import Depends, Header, HTTPException, status
@@ -93,3 +93,24 @@ def require_diagnose(user: Annotated[CurrentUser, Depends(get_current_user)]) ->
             detail="Diagnose no está habilitado para este usuario",
         )
     return user
+
+
+def can_access_diagnosis(user: CurrentUser, diagnosis: dict[str, object]) -> bool:
+    """Diagnose records belong to their assignee; administrators can access all."""
+    return user.role == "admin" or str(diagnosis.get("assigned_to") or "") == user.id
+
+
+def enforce_diagnosis_access(user: CurrentUser, diagnosis: dict[str, object]) -> None:
+    # Return 404 to avoid revealing that another user's diagnosis exists.
+    if not can_access_diagnosis(user, diagnosis):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Diagnóstico no encontrado")
+
+
+def diagnosis_assignee_for_create(user: CurrentUser, requested_assignee: str | None) -> str:
+    return (requested_assignee or user.id) if user.role == "admin" else user.id
+
+
+def sanitize_diagnosis_update(user: CurrentUser, data: dict[str, Any]) -> dict[str, Any]:
+    if user.role != "admin":
+        data.pop("assigned_to", None)
+    return data

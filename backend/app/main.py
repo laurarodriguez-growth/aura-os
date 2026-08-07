@@ -38,12 +38,19 @@ from .scoring import (
     get_scoring_preset,
     normalize_manual_scores,
 )
+from .version import APP_VERSION
 
 settings = get_settings()
 logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.INFO))
 logger = logging.getLogger("aura-grow")
 
-app = FastAPI(title=settings.app_name, version="3.0.0")
+app = FastAPI(
+    title=settings.app_name,
+    version=APP_VERSION,
+    docs_url=None if settings.is_production else "/docs",
+    redoc_url=None if settings.is_production else "/redoc",
+    openapi_url=None if settings.is_production else "/openapi.json",
+)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins,
@@ -835,23 +842,38 @@ def health() -> dict[str, str | bool]:
     return {
         "status": "ok",
         "service": settings.app_name,
-        "version": "3.2.0",
+        "version": APP_VERSION,
         "outcome_library": True,
         "chat_txt_import": True,
         "sales_guidance": True,
     }
 
 
-@app.get("/api/system/readiness")
-def system_readiness() -> dict[str, str | bool]:
+def _readiness_payload() -> dict[str, str | bool]:
+    try:
+        # The response is discarded; readiness only proves that Supabase answers.
+        get_supabase().table("profiles").select("id").limit(1).execute()
+    except Exception as exc:
+        logger.warning("Supabase readiness check failed: %s", type(exc).__name__)
+        raise HTTPException(status_code=503, detail="Dependencia de datos no disponible") from exc
     return {
         "status": "ready",
-        "version": "3.2.0",
+        "version": APP_VERSION,
         "outcome_library": True,
         "chat_analysis": True,
         "chat_txt_import": True,
         "sales_guidance": True,
     }
+
+
+@app.get("/ready")
+def readiness() -> dict[str, str | bool]:
+    return _readiness_payload()
+
+
+@app.get("/api/system/readiness")
+def system_readiness() -> dict[str, str | bool]:
+    return _readiness_payload()
 
 
 @app.get("/api/me")
