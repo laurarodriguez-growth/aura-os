@@ -4631,3 +4631,50 @@ td small { color: var(--muted); font-size: .66rem; margin-top: .2rem; max-width:
   .duplicate-dialog-footer { display: grid; grid-template-columns: 1fr; padding: .85rem 1rem max(.85rem, env(safe-area-inset-bottom)); }
   .duplicate-dialog-footer .button.primary { grid-row: 1; }
 }
+
+/* Pre-Diagnóstico AURA */
+.prediagnosis-filters { grid-template-columns: minmax(260px,1fr) 190px 190px auto; }
+.prediagnosis-card { text-align: left; color: inherit; width: 100%; cursor: pointer; font: inherit; }
+.prediagnosis-eligibility { display: inline-flex; align-items: center; min-height: 24px; padding: .25rem .5rem; border-radius: 999px; font-weight: 700; }
+.prediagnosis-eligibility.eligible { background: rgba(29,185,84,.12); color: #72e29c; }
+.prediagnosis-eligibility.needs_more_info { background: rgba(255,183,77,.12); color: #ffd08a; }
+.prediagnosis-eligibility.not_ready { background: rgba(255,255,255,.07); color: var(--muted); }
+.prediagnosis-modal-layer { position: fixed; inset: 0; z-index: 80; display: grid; justify-items: end; }
+.prediagnosis-detail-panel { position: relative; width: min(620px, 100vw); height: 100dvh; overflow-y: auto; background: var(--bg); border-left: 1px solid var(--border); padding: 1rem; z-index: 2; }
+.prediagnosis-detail-panel > header { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; position: sticky; top: 0; background: var(--bg); padding-bottom: .8rem; z-index: 1; }
+.prediagnosis-detail-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: .6rem; margin: 1rem 0; }
+.prediagnosis-detail-grid > div { padding: .8rem; border: 1px solid var(--border-soft); border-radius: 12px; background: var(--surface); }
+.prediagnosis-detail-grid small, .prediagnosis-lead-indicator span { display: block; color: var(--muted); font-size: .65rem; }
+.prediagnosis-detail-grid strong { display: block; margin-top: .3rem; }
+.prediagnosis-answers { margin-top: .8rem; padding: 1rem; }
+.prediagnosis-answers dl { margin: 0; }
+.prediagnosis-answers dl > div { display: grid; grid-template-columns: minmax(130px,.8fr) 1.2fr; gap: 1rem; padding: .55rem 0; border-bottom: 1px solid var(--border-soft); }
+.prediagnosis-answers dt { color: var(--muted); }
+.prediagnosis-answers dd { margin: 0; font-weight: 600; }
+.prediagnosis-lead-indicator { grid-column: 1 / -1; border-top: 1px solid var(--border-soft); padding-top: .7rem; }
+.prediagnosis-lead-indicator strong { color: #d19aff; }
+
+@media (max-width: 900px) {
+  .prediagnosis-filters { grid-template-columns: 1fr; }
+  .prediagnosis-detail-panel { width: 100vw; }
+  .prediagnosis-detail-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 560px) {
+  .prediagnosis-detail-grid { grid-template-columns: 1fr; }
+  .prediagnosis-answers dl > div { grid-template-columns: 1fr; gap: .2rem; }
+}
+
+/* Diagnose · arquitectura comercial AURA v2 */
+.diagnose-architecture-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; margin: 1rem 0; }
+.diagnose-architecture-card { display: flex; min-height: 210px; flex-direction: column; gap: .65rem; padding: 1.25rem; color: var(--text); text-decoration: none; }
+.diagnose-architecture-card small { color: var(--muted); font-size: .67rem; font-weight: 700; letter-spacing: .12em; }
+.diagnose-architecture-card h3 { margin: 0; font-size: 1.15rem; }
+.diagnose-architecture-card p { flex: 1; margin: 0; color: var(--muted); line-height: 1.6; }
+.diagnose-architecture-card > span { display: inline-flex; align-items: center; gap: .35rem; color: var(--accent); font-size: .78rem; font-weight: 700; }
+.diagnose-architecture-card.active { border-color: rgba(var(--accent-rgb), .42); box-shadow: 0 0 0 1px rgba(var(--accent-rgb), .08), 0 18px 55px rgba(0,0,0,.18); }
+.diagnose-architecture-card.future { opacity: .72; }
+.aura-journey-overview .section-heading { margin-bottom: .9rem; }
+.aura-journey-overview .section-heading h2 { margin-bottom: .45rem; }
+.diagnosis-phase-boundary { padding: 1.2rem; border-style: dashed; }
+.diagnosis-phase-boundary p { margin-bottom: 0; color: var(--muted); }
+@media (max-width: 980px) { .diagnose-architecture-grid { grid-template-columns: 1fr; } }

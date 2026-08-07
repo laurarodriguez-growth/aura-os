@@ -24,6 +24,7 @@ from .exports import CALL_EXPORT_FIELDS, LEAD_EXPORT_FIELDS, consolidated_rows, 
 from .google_places import (
     autocomplete_places, build_queries, is_hard_excluded, place_details, place_to_lead, search_text,
 )
+from .prediagnosis import router as prediagnosis_router
 from .outcomes import (
     derive_outcome_stage, get_outcome_definition, router as outcomes_router,
     suggested_followup_date,
@@ -61,6 +62,9 @@ app.add_middleware(
 )
 
 app.include_router(diagnose_definitive_router)
+# Static /api/diagnose/prediagnoses routes must be registered before
+# the dynamic /api/diagnose/{diagnosis_id} route.
+app.include_router(prediagnosis_router)
 app.include_router(diagnose_router)
 app.include_router(outcomes_router)
 
@@ -102,7 +106,7 @@ PIPELINE_STAGES = [
     {"key": "responded", "label": "Respondieron", "description": "Conversación abierta"},
     {"key": "interested", "label": "Interesados", "description": "Necesidad confirmada"},
     {"key": "meeting_booked", "label": "Reunión agendada", "description": "Llamada de 15 minutos"},
-    {"key": "diagnosis_sold", "label": "Diagnóstico vendido", "description": "Diagnóstico Premium cerrado"},
+    {"key": "diagnosis_sold", "label": "Diagnóstico vendido", "description": "Diagnóstico AURA cerrado"},
     {"key": "proposal_sent", "label": "Propuesta enviada", "description": "Implementación presentada"},
     {"key": "implementation_sold", "label": "Implementación vendida", "description": "Cliente ganado"},
     {"key": "closed", "label": "Cerrados", "description": "No interesado, no califica o descartado"},
@@ -312,6 +316,11 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     elif has_phone or has_whatsapp:
         score += 2
 
+    if lead.get("has_prediagnosis"):
+        score += 45
+        latest_prediagnosis = lead.get("prediagnosis_latest") or {}
+        reasons.insert(0, f"Completó Pre-Diagnóstico AURA · {latest_prediagnosis.get('probable_leak_area') or 'revisar lectura'}")
+
     if conversation_status == "response_received":
         action = "Responder al lead ahora"
         channel = "WhatsApp" if has_whatsapp else "Llamada"
@@ -340,6 +349,9 @@ def _focus_priority(lead: dict[str, Any], today: date) -> dict[str, Any] | None:
     elif due_state in {"overdue", "today"}:
         action = "Completar seguimiento"
         channel = "WhatsApp" if has_whatsapp and outcome in {"No respondió", "Buzón de voz", "Solicitó información"} else "Llamada"
+    elif lead.get("has_prediagnosis"):
+        action = "Revisar Pre-Diagnóstico y retomar conversación"
+        channel = "WhatsApp" if has_whatsapp else "Llamada"
     elif attempts == 0:
         action = "Realizar primer contacto"
         channel = "Llamada" if has_phone else "WhatsApp"
@@ -1110,8 +1122,12 @@ def places_autocomplete(
             input_text=input.strip(), country_code=code, session_token=session_token,
             place_type=place_type, latitude=latitude, longitude=longitude,
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError:
+        logger.exception("Google Places Autocomplete no respondió correctamente")
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo consultar Google Places en este momento.",
+        ) from None
     return {"suggestions": suggestions, "attribution": "Google Maps"}
 
 
@@ -1126,8 +1142,12 @@ def places_details(
     _assert_country_access(user, code)
     try:
         details = place_details(place_id=place_id, session_token=session_token)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError:
+        logger.exception("Google Place Details no respondió correctamente")
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo consultar el detalle de la ubicación en este momento.",
+        ) from None
     if _normalized_country(details.get("country_code"), "") != code:
         raise HTTPException(status_code=422, detail="La ubicación no pertenece al país seleccionado")
     return details
@@ -1573,11 +1593,18 @@ def step_search_job(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Falló el paso de búsqueda %s", job_id)
+        logger.exception("Falló el paso de búsqueda")
         db.table("search_jobs").update(
-            {"status": "failed", "error_message": str(exc)[:1000], "updated_at": utcnow_iso()}
+            {
+                "status": "failed",
+                "error_message": "Error interno durante el procesamiento de la búsqueda.",
+                "updated_at": utcnow_iso(),
+            }
         ).eq("id", job_id).execute()
-        raise HTTPException(status_code=500, detail=f"La búsqueda falló: {str(exc)[:300]}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="La búsqueda no pudo completarse.",
+        ) from None
 
 
 @app.get("/api/focus/assignment")
@@ -1823,8 +1850,20 @@ def aura_focus(
         and (user.role == "admin" or user.operating_country == "ALL" or _normalized_country(lead.get("country_code")) == _normalized_country(user.operating_country))
     )
     all_items: list[dict[str, Any]] = []
+    prediagnosis_rows = _fetch_all("prediagnoses", "lead_id,created_at,probable_leak_area,eligibility")
+    prediagnosis_latest: dict[str, dict[str, Any]] = {}
+    for item in prediagnosis_rows:
+        lead_id = str(item.get("lead_id") or "")
+        if not lead_id:
+            continue
+        current = prediagnosis_latest.get(lead_id)
+        if not current or str(item.get("created_at") or "") > str(current.get("created_at") or ""):
+            prediagnosis_latest[lead_id] = item
 
     for lead in leads:
+        latest_prediagnosis = prediagnosis_latest.get(str(lead.get("id") or ""))
+        lead["has_prediagnosis"] = bool(latest_prediagnosis)
+        lead["prediagnosis_latest"] = latest_prediagnosis
         if user.role != "admin" and user.operating_country != "ALL" and _normalized_country(lead.get("country_code")) != _normalized_country(user.operating_country):
             continue
         owner_id = str(lead.get("owner_id") or "")
@@ -2261,6 +2300,10 @@ def get_lead(lead_id: str, user: Annotated[CurrentUser, Depends(get_current_user
     activities = db.table("activities").select("*").eq("lead_id", lead_id).order("created_at", desc=True).limit(100).execute().data or []
     lead["call_logs"] = calls
     lead["activities"] = activities
+    prediagnoses = db.table("prediagnoses").select("id,created_at,probable_leak_area,secondary_area,eligibility,confidence,next_action").eq("lead_id", lead_id).order("created_at", desc=True).limit(25).execute().data or []
+    lead["has_prediagnosis"] = bool(prediagnoses)
+    lead["prediagnosis_latest"] = prediagnoses[0] if prediagnoses else None
+    lead["prediagnosis_count"] = len(prediagnoses)
     return lead
 
 
@@ -2466,9 +2509,12 @@ def create_call_log(
             row,
             protected_columns={"lead_id", "occurred_at", "channel", "direction", "outcome"},
         )
-    except Exception as exc:
-        logger.exception("No se pudo guardar la interacción del lead %s", lead_id)
-        raise HTTPException(status_code=400, detail=f"No se pudo guardar la interacción: {exc}") from exc
+    except Exception:
+        logger.exception("No se pudo guardar la interacción")
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo guardar la interacción. Revisa los datos e inténtalo nuevamente.",
+        ) from None
     call = _first(response) or inserted_row
 
     attempt_count = int(lead.get("contact_attempts") or 0)
@@ -2538,7 +2584,7 @@ def create_call_log(
     except Exception:
         # La interacción ya fue guardada. No devolvemos un falso fracaso que invite a duplicarla.
         lead_update_warning = "La interacción se guardó, pero la ficha no pudo actualizar toda la clasificación automáticamente."
-        logger.exception("Interacción guardada, pero no se pudo actualizar el lead %s", lead_id)
+        logger.exception("Interacción guardada, pero no se pudo actualizar el lead")
 
     description_outcome = outcome_name if outcome_name != "Pendiente" else conversation_status
     _log_activity(

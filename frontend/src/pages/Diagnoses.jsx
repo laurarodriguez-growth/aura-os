@@ -37,9 +37,9 @@ export default function Diagnoses() {
   return (
     <>
       <PageHeader
-        title="Diagnósticos"
-        description="Consulta, continúa y compara los diagnósticos vivos de Aura Grow."
-        actions={<Link className="button diagnose-primary" to="/diagnose/new"><ClipboardPlus size={17} />Nuevo diagnóstico</Link>}
+        title="Diagnósticos AURA"
+        description="Diagnósticos completos basados en evidencia real del recorrido Consulta → Respuesta → Seguimiento → Cita → Venta."
+        actions={<Link className="button diagnose-primary" to="/diagnose/new"><ClipboardPlus size={17} />Nuevo Diagnóstico AURA</Link>}
       />
 
       <section className="panel diagnose-filters">
@@ -55,12 +55,12 @@ export default function Diagnoses() {
       </section>
 
       {error && <div className="form-error page-error">{error}</div>}
-      <p className="diagnose-count">{total} diagnósticos encontrados</p>
+      <p className="diagnose-count">{total} Diagnósticos AURA encontrados</p>
 
       {loading ? (
-        <section className="panel diagnose-loading">Cargando diagnósticos…</section>
+        <section className="panel diagnose-loading">Cargando Diagnósticos AURA…</section>
       ) : !items.length ? (
-        <section className="panel"><EmptyState title="No encontramos diagnósticos" text="Cambia los filtros o crea un diagnóstico nuevo." /></section>
+        <section className="panel"><EmptyState title="No encontramos Diagnósticos AURA" text="Cambia los filtros o crea un Diagnóstico AURA nuevo." /></section>
       ) : (
         <section className="diagnose-card-grid">
           {items.map((item) => (
@@ -69,7 +69,7 @@ export default function Diagnoses() {
               <h2>{item.company_name}</h2>
               <p>{item.industry || 'Industria sin definir'}</p>
               <div className="diagnose-company-meta">
-                <div><span>Score general</span><strong>{item.overall_score}</strong></div>
+                <div><span>Índice interno</span><strong>{item.overall_score}</strong></div>
                 <div><span>Nivel</span><strong>{item.overall_level}</strong></div>
               </div>
               <footer><span>Abrir workspace</span><ArrowRight size={17} /></footer>

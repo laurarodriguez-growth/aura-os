@@ -31,87 +31,89 @@ VISUAL_STATUSES = {
     "gray": {"label": "Sin evidencia", "score": None, "description": "La afirmación todavía no pudo comprobarse."},
 }
 
+# Arquitectura oficial del Diagnóstico AURA completo.
+# Mantiene las claves históricas para no romper diagnósticos ni migraciones previas.
 CONVERSATION_BLOCKS = [
     {
-        "key": "objective_direction", "title": "Objetivo y resultado esperado", "score_area": None,
-        "intro": "Alineemos qué resultado necesita el negocio y qué decisión debe habilitar este diagnóstico.",
-        "core_question": "¿Qué resultado comercial concreto esperan mejorar y cómo sabrán que cambió?",
-        "followups": ["¿En qué plazo esperan verlo?", "¿Qué ocurre si no se corrige?"],
+        "key": "objective_direction", "title": "Objetivo, demanda y resultado esperado", "score_area": None,
+        "intro": "Alineemos qué resultado necesita el negocio, qué nivel de demanda existe y qué decisión debe habilitar el diagnóstico.",
+        "core_question": "¿Qué resultado comercial concreto esperan mejorar, cuántas oportunidades reciben y cómo sabrán que cambió?",
+        "followups": ["¿En qué plazo esperan verlo?", "¿Qué ocurre si no se corrige?", "¿La operación puede absorber más demanda hoy?"],
         "section": "general", "priority": "high",
     },
     {
-        "key": "icp_service", "title": "Cliente y servicio prioritario", "score_area": "patient_experience",
-        "intro": "Definamos a quién atienden, qué necesita y qué experiencia debe recibir.",
-        "core_question": "¿Qué tipo de paciente o cliente y qué servicio deben priorizarse en este proceso?",
-        "followups": ["¿Cómo reconocen una consulta de buen encaje?", "¿Qué información necesita esa persona para avanzar con confianza?"],
+        "key": "icp_service", "title": "Cliente y oferta prioritaria", "score_area": "patient_experience",
+        "intro": "Definamos a quién atienden, qué compra o agenda y qué información necesita para avanzar con confianza.",
+        "core_question": "¿Qué tipo de cliente y qué servicio, evaluación, cotización o venta deben priorizarse en este proceso?",
+        "followups": ["¿Cómo reconocen una oportunidad de buen encaje?", "¿Qué información necesita esa persona antes de avanzar?"],
         "section": "icp", "priority": "medium",
     },
     {
-        "key": "inquiry_journey", "title": "Recorrido de una consulta real", "score_area": "qualification_next_step",
-        "intro": "Reconstruyamos un caso real desde que entra hasta que avanza o se pierde.",
-        "core_question": "Cuéntame la última consulta real: ¿por dónde entró, quién respondió y cuál fue el siguiente paso?",
-        "followups": ["¿Dónde quedó registrada?", "¿Cómo decidieron si estaba calificada?"],
+        "key": "inquiry_journey", "title": "Consulta · entrada y siguiente paso", "score_area": "qualification_next_step",
+        "intro": "Reconstruyamos una oportunidad real desde que entra hasta que recibe responsable y próximo paso.",
+        "core_question": "Cuéntame la última consulta real: ¿por dónde entró, dónde quedó registrada, quién la tomó y cuál fue el siguiente paso?",
+        "followups": ["¿Cómo se asigna responsable?", "¿Cómo deciden qué debe ocurrir después?", "¿Qué pasa si llega por otro canal?"],
         "section": "conversion", "priority": "critical",
     },
     {
-        "key": "first_response", "title": "Primera respuesta", "score_area": "first_response",
-        "intro": "Revisemos velocidad, consistencia y capacidad de conducir la conversación.",
-        "core_question": "¿Cuánto tardan en responder y qué debe lograr la primera respuesta?",
-        "followups": ["¿Hay un estándar por horario o canal?", "¿Quién cubre cuando la responsable no está?"],
+        "key": "first_response", "title": "Respuesta · velocidad y conducción", "score_area": "first_response",
+        "intro": "Revisemos velocidad, consistencia, cobertura y capacidad de conducir la conversación hacia una acción concreta.",
+        "core_question": "¿Cuánto tardan en responder y qué debe lograr la primera respuesta para que la oportunidad avance?",
+        "followups": ["¿Hay un estándar por horario o canal?", "¿Quién cubre cuando la responsable no está?", "¿Qué ocurre fuera de horario?"],
         "section": "conversion", "priority": "critical",
     },
     {
-        "key": "followup", "title": "Seguimiento", "score_area": "followup",
-        "intro": "El seguimiento es el núcleo: debe tener fecha, responsable, registro y próximo paso.",
-        "core_question": "Dame un caso reciente: ¿cuándo se programó el seguimiento, quién quedó responsable y dónde se registró?",
-        "followups": ["¿Cuántos intentos hacen y con qué cadencia?", "¿Cómo detectan seguimientos vencidos?"],
+        "key": "followup", "title": "Seguimiento · responsable, fecha y continuidad", "score_area": "followup",
+        "intro": "El seguimiento debe dejar cada oportunidad con responsable, próximo paso, fecha y registro verificable.",
+        "core_question": "Dame un caso reciente: ¿cuándo se programó el seguimiento, quién quedó responsable, cuál era el próximo paso y dónde quedó registrado?",
+        "followups": ["¿Cuántos intentos hacen y con qué cadencia?", "¿Cómo detectan seguimientos vencidos?", "¿Qué ocurre después de un silencio o rechazo?"],
         "section": "conversion", "priority": "critical",
     },
     {
-        "key": "appointments_recovery", "title": "Citas y recuperación", "score_area": "appointments_recovery",
-        "intro": "Veamos agendamiento, confirmación, asistencia y recuperación de cancelaciones o no-show.",
-        "core_question": "¿Cómo se agenda, confirma y recupera una cita cancelada o no atendida?",
-        "followups": ["¿Quién queda responsable?", "¿Dónde registran reprogramaciones y no-show?"],
+        "key": "appointments_recovery", "title": "Cita · agenda, asistencia y recuperación", "score_area": "appointments_recovery",
+        "intro": "Veamos cómo una oportunidad pasa a cita, evaluación o reunión y qué ocurre con cancelaciones, reprogramaciones y no-show.",
+        "core_question": "¿Cómo se agenda, confirma y recupera una cita, evaluación o reunión cancelada o no atendida?",
+        "followups": ["¿Quién queda responsable?", "¿Dónde registran confirmaciones, reprogramaciones y no-show?", "¿Qué próxima acción queda después de la cita?"],
         "section": "conversion", "priority": "high",
     },
     {
-        "key": "team_responsibilities", "title": "Equipo y responsabilidades", "score_area": "team_responsibilities",
-        "intro": "Aclaremos propiedad, entregas y escalamiento para que el proceso no dependa de memoria.",
-        "core_question": "¿Quién es responsable de cada etapa y qué pasa cuando una consulta cambia de persona?",
-        "followups": ["¿Cómo se transfiere el contexto?", "¿Quién revisa que el próximo paso se cumpla?"],
-        "section": "process", "priority": "high",
-    },
-    {
-        "key": "tools_records", "title": "Herramientas y registros", "score_area": "tools_records",
-        "intro": "Identifiquemos la fuente de verdad y qué trabajo sigue siendo manual.",
-        "core_question": "¿Qué herramientas usan y dónde queda el registro central de cada consulta?",
-        "followups": ["¿Quién lo actualiza?", "¿Qué información vive todavía en chats o notas personales?"],
-        "section": "process", "priority": "high",
-    },
-    {
-        "key": "measurement_conversion", "title": "Métricas y conversión", "score_area": "measurement_conversion",
-        "intro": "Separemos percepción de datos para medir consultas, citas, asistencia y resultado.",
-        "core_question": "¿Cuántas consultas, citas y asistencias tuvieron aproximadamente en el último periodo?",
-        "followups": ["¿Dónde se calculan esas cifras?", "¿Pueden medir de consulta a tratamiento o venta?"],
+        "key": "measurement_conversion", "title": "Venta · resultado y medición", "score_area": "measurement_conversion",
+        "intro": "Cerremos el recorrido con evidencia de qué terminó comprando, qué se perdió y cómo se mide la conversión.",
+        "core_question": "¿Cuántas consultas terminaron en cita, asistencia, cotización aceptada o venta en el último periodo y dónde se registra ese resultado?",
+        "followups": ["¿Pueden medir de consulta a venta?", "¿Registran motivos de pérdida?", "¿Cuánto tarda normalmente el cierre?"],
         "section": "conversion", "priority": "critical",
     },
     {
-        "key": "automation_validation", "title": "Automatización y validación final", "score_area": None,
-        "intro": "Validemos qué conviene automatizar después de estabilizar responsables y registros.",
-        "core_question": "¿Qué parte repetitiva quieren automatizar y qué proceso estable debe existir primero?",
-        "followups": ["Si usan bot, ¿cómo transfiere a una persona?", "¿Qué no deberíamos automatizar todavía?"],
+        "key": "team_responsibilities", "title": "Capacidad, equipo y responsabilidades", "score_area": "team_responsibilities",
+        "intro": "Validemos propiedad, capacidad y escalamiento para que el sistema no dependa de memoria ni se sobrecargue.",
+        "core_question": "¿Quién es responsable de cada etapa y qué pasa si mañana aumentan las consultas o una oportunidad cambia de persona?",
+        "followups": ["¿Cómo se transfiere el contexto?", "¿Quién revisa que el próximo paso se cumpla?", "¿Qué límite de capacidad existe hoy?"],
+        "section": "process", "priority": "high",
+    },
+    {
+        "key": "tools_records", "title": "Herramientas, registros y fuente de verdad", "score_area": "tools_records",
+        "intro": "Identifiquemos dónde vive la información, qué trabajo sigue siendo manual y si las herramientas actuales realmente sostienen el proceso.",
+        "core_question": "¿Qué herramientas usan y dónde queda la fuente de verdad de cada oportunidad desde la consulta hasta el resultado?",
+        "followups": ["¿Quién actualiza el registro?", "¿Qué información vive todavía en chats, notas o memoria?", "¿Qué sistemas ya tienen inversión o adopción del equipo?"],
+        "section": "process", "priority": "high",
+    },
+    {
+        "key": "automation_validation", "title": "Automatización, IA y límites", "score_area": None,
+        "intro": "La tecnología se evalúa después de comprobar el proceso. Aquí definimos qué puede automatizarse, qué requiere supervisión y qué no debe tocarse todavía.",
+        "core_question": "¿Qué tareas repetitivas, respuestas, seguimientos o integraciones quieren automatizar y qué proceso estable existe detrás?",
+        "followups": ["¿Qué debe aprobar una persona?", "¿Qué situaciones deben transferirse a un humano?", "¿Qué no deberíamos automatizar todavía?"],
         "section": "automation", "priority": "medium",
     },
 ]
 
 EVIDENCE_REQUIREMENTS = [
-    {"key": "booked_conversation", "label": "Conversación que terminó en cita", "block_key": "appointments_recovery"},
-    {"key": "no_response_conversation", "label": "Conversación que dejó de responder", "block_key": "followup"},
-    {"key": "objection_conversation", "label": "Conversación con objeción, rechazo o baja calificación", "block_key": "inquiry_journey"},
+    {"key": "advanced_conversation", "label": "Conversación que avanzó a cita, evaluación, cotización o venta", "block_key": "appointments_recovery"},
+    {"key": "stalled_conversation", "label": "Conversación que dejó de avanzar o quedó sin seguimiento", "block_key": "followup"},
+    {"key": "objection_or_loss", "label": "Conversación con objeción, rechazo o motivo de pérdida", "block_key": "inquiry_journey"},
     {"key": "scheduling_system", "label": "Captura del sistema o método de agenda", "block_key": "appointments_recovery"},
-    {"key": "automatic_response", "label": "Respuesta automática actual", "block_key": "first_response"},
+    {"key": "first_response_sample", "label": "Muestra de primera respuesta o respuesta automática actual", "block_key": "first_response"},
     {"key": "followup_method", "label": "Muestra del método de seguimiento", "block_key": "followup"},
-    {"key": "funnel_numbers", "label": "Cifras aproximadas de consultas, citas y asistencia", "block_key": "measurement_conversion"},
+    {"key": "funnel_numbers", "label": "Cifras de consultas, citas/evaluaciones y ventas del mismo periodo", "block_key": "measurement_conversion"},
 ]
 
 
@@ -251,7 +253,7 @@ def _report_readiness(
     critical_blocks = {"first_response", "followup", "measurement_conversion"}
     missing_answers = sorted(critical_blocks - answered_blocks)
     if missing_answers:
-        reasons.append("Faltan respuestas núcleo en Primera respuesta, Seguimiento o Métricas.")
+        reasons.append("Faltan respuestas núcleo en Respuesta, Seguimiento o Venta/Medición.")
 
     active_evidence = [row for row in evidence if row.get("deletion_status") != "deleted" and row.get("validation_status") != "discarded"]
     requirement_keys = {str(row.get("requirement_key")) for row in active_evidence if row.get("requirement_key") and row.get("validation_status") == "validated"}
@@ -262,7 +264,7 @@ def _report_readiness(
     eval_by_block = {str(row.get("block_key")): row for row in evaluations}
     gray_critical = [key for key in critical_blocks if (eval_by_block.get(key) or {}).get("visual_status", "gray") == "gray"]
     if gray_critical:
-        reasons.append("Primera respuesta, Seguimiento y Medición no pueden quedar completamente grises.")
+        reasons.append("Respuesta, Seguimiento y Venta/Medición no pueden quedar completamente grises.")
 
     unresolved = [row for row in active_evidence if row.get("validation_status") == "requires_information"]
     if unresolved:
@@ -294,11 +296,11 @@ def _definitive_payload(diagnosis_id: str, user: CurrentUser, include_evidence: 
     evaluation_by_block = {str(row.get("block_key")): row for row in evaluations}
     process_stages = []
     stage_map = [
-        ("Consulta", "inquiry_journey"), ("Primera respuesta", "first_response"),
-        ("Calificación", "inquiry_journey"), ("Siguiente paso", "inquiry_journey"),
-        ("Seguimiento", "followup"), ("Cita", "appointments_recovery"),
-        ("Confirmación", "appointments_recovery"), ("Asistencia", "appointments_recovery"),
-        ("Tratamiento, venta o abandono", "measurement_conversion"),
+        ("Consulta", "inquiry_journey"),
+        ("Respuesta", "first_response"),
+        ("Seguimiento", "followup"),
+        ("Cita", "appointments_recovery"),
+        ("Venta", "measurement_conversion"),
     ]
     for label, block_key in stage_map:
         evaluation = evaluation_by_block.get(block_key) or {}
