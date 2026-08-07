@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+from urllib.parse import quote
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -13,6 +15,7 @@ from .db import get_supabase
 TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 AUTOCOMPLETE_URL = "https://places.googleapis.com/v1/places:autocomplete"
 PLACE_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
+PLACE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,255}$")
 FIELD_MASK = ",".join(
     [
         "places.id",
@@ -163,8 +166,15 @@ def autocomplete_places(
 
 def place_details(*, place_id: str, session_token: str) -> dict[str, Any]:
     settings = get_settings()
+
+    normalized_place_id = str(place_id or "").strip()
+    if not PLACE_ID_PATTERN.fullmatch(normalized_place_id):
+        raise RuntimeError("Google Place ID inválido")
+
+    encoded_place_id = quote(normalized_place_id, safe="")
+
     response = requests.get(
-        PLACE_DETAILS_URL.format(place_id=place_id),
+        PLACE_DETAILS_URL.format(place_id=encoded_place_id),
         params={"languageCode": "es", "sessionToken": session_token},
         headers={
             "X-Goog-Api-Key": settings.google_maps_api_key,
@@ -173,18 +183,24 @@ def place_details(*, place_id: str, session_token: str) -> dict[str, Any]:
         timeout=12,
     )
     if response.status_code >= 400:
-        raise RuntimeError(f"Google Place Details respondió {response.status_code}: {response.text[:500]}")
+        raise RuntimeError(
+            f"Google Place Details respondió {response.status_code}: {response.text[:500]}"
+        )
+
     place = response.json()
     geo = geographic_fields(place)
     return {
-        "name": ((place.get("displayName") or {}).get("text") or place.get("formattedAddress") or "Ubicación"),
+        "name": (
+            (place.get("displayName") or {}).get("text")
+            or place.get("formattedAddress")
+            or "Ubicación"
+        ),
         "formatted_address": place.get("formattedAddress") or "",
-        "place_id": place.get("id") or place_id,
+        "place_id": place.get("id") or normalized_place_id,
         "latitude": (place.get("location") or {}).get("latitude"),
         "longitude": (place.get("location") or {}).get("longitude"),
         **geo,
     }
-
 
 def geographic_fields(place: dict[str, Any]) -> dict[str, Any]:
     values: dict[str, tuple[str | None, str | None]] = {}
