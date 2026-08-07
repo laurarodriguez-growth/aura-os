@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Descargar repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Instalar pnpm fijado
         uses: pnpm/action-setup@v4
