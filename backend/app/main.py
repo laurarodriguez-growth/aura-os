@@ -1122,8 +1122,12 @@ def places_autocomplete(
             input_text=input.strip(), country_code=code, session_token=session_token,
             place_type=place_type, latitude=latitude, longitude=longitude,
         )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError:
+        logger.exception("Google Places Autocomplete no respondió correctamente")
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo consultar Google Places en este momento.",
+        ) from None
     return {"suggestions": suggestions, "attribution": "Google Maps"}
 
 
@@ -1138,8 +1142,12 @@ def places_details(
     _assert_country_access(user, code)
     try:
         details = place_details(place_id=place_id, session_token=session_token)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError:
+        logger.exception("Google Place Details no respondió correctamente")
+        raise HTTPException(
+            status_code=502,
+            detail="No se pudo consultar el detalle de la ubicación en este momento.",
+        ) from None
     if _normalized_country(details.get("country_code"), "") != code:
         raise HTTPException(status_code=422, detail="La ubicación no pertenece al país seleccionado")
     return details
@@ -1585,11 +1593,18 @@ def step_search_job(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Falló el paso de búsqueda %s", job_id)
+        logger.exception("Falló el paso de búsqueda")
         db.table("search_jobs").update(
-            {"status": "failed", "error_message": str(exc)[:1000], "updated_at": utcnow_iso()}
+            {
+                "status": "failed",
+                "error_message": "Error interno durante el procesamiento de la búsqueda.",
+                "updated_at": utcnow_iso(),
+            }
         ).eq("id", job_id).execute()
-        raise HTTPException(status_code=500, detail=f"La búsqueda falló: {str(exc)[:300]}") from exc
+        raise HTTPException(
+            status_code=500,
+            detail="La búsqueda no pudo completarse.",
+        ) from None
 
 
 @app.get("/api/focus/assignment")
@@ -2494,9 +2509,12 @@ def create_call_log(
             row,
             protected_columns={"lead_id", "occurred_at", "channel", "direction", "outcome"},
         )
-    except Exception as exc:
-        logger.exception("No se pudo guardar la interacción del lead %s", lead_id)
-        raise HTTPException(status_code=400, detail=f"No se pudo guardar la interacción: {exc}") from exc
+    except Exception:
+        logger.exception("No se pudo guardar la interacción")
+        raise HTTPException(
+            status_code=400,
+            detail="No se pudo guardar la interacción. Revisa los datos e inténtalo nuevamente.",
+        ) from None
     call = _first(response) or inserted_row
 
     attempt_count = int(lead.get("contact_attempts") or 0)
@@ -2566,7 +2584,7 @@ def create_call_log(
     except Exception:
         # La interacción ya fue guardada. No devolvemos un falso fracaso que invite a duplicarla.
         lead_update_warning = "La interacción se guardó, pero la ficha no pudo actualizar toda la clasificación automáticamente."
-        logger.exception("Interacción guardada, pero no se pudo actualizar el lead %s", lead_id)
+        logger.exception("Interacción guardada, pero no se pudo actualizar el lead")
 
     description_outcome = outcome_name if outcome_name != "Pendiente" else conversation_status
     _log_activity(
