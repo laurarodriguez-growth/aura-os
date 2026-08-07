@@ -18,13 +18,14 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.9
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - name: Activar pnpm fijado
-        run: corepack enable && corepack prepare pnpm@9.15.9 --activate
       - name: Instalar dependencias
         run: pnpm install --frozen-lockfile
       - name: Compilar frontend
@@ -44,6 +45,8 @@ jobs:
           cache: pip
           cache-dependency-path: backend/requirements-lock.txt
       - name: Instalar dependencias
-        run: pip install -r requirements-lock.txt -r requirements-dev.txt
+        run: |
+          pip install --require-hashes -r requirements-lock.txt
+          pip install -r requirements-dev.txt
       - name: Validar backend
         run: python -m compileall -q app && pytest -q tests
